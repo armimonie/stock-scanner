@@ -219,4 +219,158 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
 
     ax2_vol = ax2.twinx()
     ax2_vol.bar(df.index, df['Volume'], color='gray', alpha=0.3, label='Volume')
-    ax2_vol.set_ylabel('Volume', color='
+    ax2_vol.set_ylabel('Volume', color='gray')
+    ax2_vol.tick_params(axis='y', labelcolor='gray')
+    ax2.legend(loc='upper left')
+    
+    # 3. MACD 차트 (ax3)
+    if has_macd:
+        ax3.plot(df.index, df['MACD'], label='MACD Line', color='blue')
+        ax3.plot(df.index, df['MACD_Signal'], label='Signal Line', color='red')
+        ax3.bar(df.index, df['MACD'] - df['MACD_Signal'], label='Histogram', color='gray', alpha=0.5)
+        ax3.axhline(0, color='black', linestyle='-', linewidth=0.5)
+        ax3.set_title("MACD Indicator")
+        ax3.legend(loc='upper left')
+
+
+    plt.tight_layout()
+    return fig
+# ---------------------------------------------------------
+
+# ---------------------------------------------------------
+# 3. 메인 앱 UI (Streamlit)
+# ---------------------------------------------------------
+def get_stock_info(ticker):
+    """티커 정보, 마켓캡, 애널리스트 의견을 가져오는 헬퍼 함수"""
+    ticker_obj = yf.Ticker(ticker)
+    try:
+        info = ticker_obj.info
+        market_cap_usd = info.get('marketCap', 0) / 1_000_000_000
+        analyst_rec = info.get('recommendationKey', 'N/A')
+        return info, market_cap_usd, analyst_rec
+    except:
+        return {}, 0, 'N/A'
+
+def display_ticker_info(ticker, df, analyst_rec):
+    st.markdown(f"### {ticker} 상세 정보")
+    st.markdown(f"**🗣️ 애널리스트 의견:** **{analyst_rec.upper()}**")
+    
+    # 모든 전략 타입 이름을 전달하여 차트 함수에서 필요한 지표를 표시할 수 있도록 함
+    fig = plot_chart(ticker, df, "개별 조회", analyst_rec) 
+    if fig:
+        st.pyplot(fig)
+    else:
+        st.warning(f"티커 {ticker}의 차트 데이터를 불러오거나 계산하는 데 문제가 발생했습니다.")
+        
+    st.markdown("---")
+
+
+def main():
+    st.set_page_config(page_title="AI Trading Scanner V5.8", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V5.8 - 오류 복구 및 계산 강화 버전)")
+    st.markdown("---")
+    
+    # --- 1️⃣ 사이드바 설정 ---
+    
+    st.sidebar.header("1️⃣ 개별 종목 분석")
+    single_ticker = st.sidebar.text_input("티커 개별 조회 (예: 005930.KS)", "AAPL")
+    
+    # --- 2️⃣ 타점 전략 선택 (Multiselect) ---
+    st.sidebar.header("2️⃣ 타점 전략 선택 (다중 선택 가능)")
+    all_strategies = [
+        "A. 강력 수급 폭발 (거래량 1.5배)", 
+        "B. 단기/중기 이동평균선 골든크로스 (MA20 > MA60)", 
+        "C. RSI 과매도 반등 (30 이하)", 
+        "D. MACD 시그널선 상향 돌파", 
+        "E. MFI 과매도 반등 (20 이하)", 
+        "F. 볼린저밴드 상단 돌파", 
+        "G. 장대양봉 및 짧은 꼬리", 
+    ]
+    # 사용자가 이전 선택을 유지하도록 default 값 제거
+    selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies)
+
+    # --- 3️⃣ 스캔할 종목 목록 (코스피 하위 50 + 코스닥 상위 50 유지) ---
+    st.sidebar.header("3️⃣ 스캔할 종목 목록 (총 100개)")
+    
+    # 코스닥 상위 50개 종목 리스트 (대형주 위주)
+    kosdaq_top50 = "000210.KQ, 000660.KQ, 000880.KQ, 001120.KQ, 001390.KQ, 001550.KQ, 002170.KQ, 002200.KQ, 002270.KQ, 002320.KQ, 002360.KQ, 002390.KQ, 003380.KQ, 003550.KQ, 003560.KQ, 003620.KQ, 003650.KQ, 004140.KQ, 004720.KQ, 004830.KQ, 005180.KQ, 005880.KQ, 005930.KQ, 006400.KQ, 007680.KQ, 008770.KQ, 009190.KQ, 010060.KQ, 010120.KQ, 010140.KQ, 011070.KQ, 012280.KQ, 012450.KQ, 012750.KQ, 013420.KQ, 013640.KQ, 013700.KQ, 014990.KQ, 015350.KQ, 015760.KQ, 016600.KQ, 018000.KQ, 018260.KQ, 019550.KQ, 020660.KQ, 023590.KQ, 024740.KQ, 025680.KQ, 028080.KQ, 028300.KQ"
+    
+    # 코스피 하위 50개 종목 리스트 (소형주 위주)
+    kospi_low50 = "000100.KS, 000180.KS, 000210.KS, 000220.KS, 000230.KS, 000300.KS, 000320.KS, 000370.KS, 000480.KS, 000500.KS, 000520.KS, 000540.KS, 000650.KS, 000670.KS, 000810.KS, 000860.KS, 000880.KS, 000950.KS, 000970.KS, 001040.KS, 001060.KS, 001070.KS, 001080.KS, 001120.KS, 001140.KS, 001210.KS, 001230.KS, 001250.KS, 001270.KS, 001380.KS, 001390.KS, 001430.KS, 001520.KS, 001550.KS, 001570.KS, 001630.KS, 001740.KS, 001780.KS, 001800.KS, 001820.KS, 001940.KS, 001950.KS, 002020.KS, 002030.KS, 002070.KS, 002170.KS, 002200.KS, 002210.KS, 002240.KS, 002270.KS"
+
+    # 두 리스트를 합쳐서 기본값 설정
+    default_tickers = kospi_low50 + ", " + kosdaq_top50
+    st.sidebar.markdown("현재 **코스피 소형주 50개 + 코스닥 대형주 50개 (총 100개)**가 자동 설정되었습니다. **(수정 가능)**")
+    tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", default_tickers) 
+    
+    # --- 4️⃣ 텔레그램 알림 설정 (고정 및 자동 활성화 유지) ---
+    st.sidebar.header("4️⃣ 텔레그램 알림 설정 (자동)")
+    tg_token = "7983927652:AAH8RRQpyJaika94NVmbmowvDIu5wHgfyWo"
+    tg_chat_id = "1786596437"
+    enable_alert = True 
+    st.sidebar.success("✅ 텔레그램 알림이 코드로 고정/활성화되었습니다.")
+    st.sidebar.markdown(f"**챗 ID:** `{tg_chat_id}`")
+    
+    # --- 메인 화면 로직 ---
+    
+    if st.button("🔍 타점 전략 스캔 시작"):
+        if not selected_strategies:
+            st.warning("분석할 전략을 1개 이상 선택해주세요. 🧘")
+            return
+
+        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 총 {len(tickers_input.split(','))}개 종목을 스캔합니다...")
+        
+        tickers = [t.strip() for t in tickers_input.split(',') if t.strip()]
+        found_count = 0
+        progress_bar = st.progress(0)
+        
+        for i, ticker in enumerate(tickers):
+            
+            # --- 정보 가져오기 ---
+            info, market_cap_usd, analyst_rec = get_stock_info(ticker)
+            
+            # --- 다중 전략 분석 실행 ---
+            matched_reasons = analyze_stock(ticker, selected_strategies)
+            
+            if matched_reasons:
+                found_count += 1
+                
+                # 화면 표시
+                with st.expander(f"🔥 {ticker} - 매수 신호 포착! (총 {len(matched_reasons)}개 조건 만족)", expanded=True):
+                    st.markdown(f"**📈 시가총액:** 약 {market_cap_usd:,.1f} 억 달러")
+                    st.markdown(f"**🗣️ 애널리스트 의견:** **{analyst_rec.upper()}**")
+                    
+                    # 데이터를 다시 다운로드하고 지표 계산 (차트용)
+                    data_for_plot = yf.download(ticker, period="1y", progress=False)
+                    data_for_plot = calculate_indicators(data_for_plot)
+                    
+                    # 매칭된 전략명을 모두 합쳐서 차트 함수에 전달 (차트 지표 표시를 위해)
+                    strategy_list = [match['strategy'] for match in matched_reasons]
+                    strategy_names = ", ".join(strategy_list)
+
+                    # 차트 시각화
+                    fig = plot_chart(ticker, data_for_plot, strategy_names, analyst_rec)
+                    if fig:
+                        st.pyplot(fig)
+                        
+                    # 매칭된 이유 출력
+                    for match in matched_reasons:
+                        st.info(f"**[{match['strategy']}]** {match['reason']}")
+                        
+                        # 텔레그램 전송
+                        if enable_alert and tg_token and tg_chat_id:
+                            msg = f"[신호 포착] 🚀 종목: {ticker} | 전략: {match['strategy']} | 이유: {match['reason']}"
+                            send_telegram_msg(tg_token, tg_chat_id, msg)
+                    
+                    if enable_alert and tg_token and tg_chat_id:
+                        st.success(f"📩 {ticker} 알림 전송 완료 (자동)")
+                        
+            progress_bar.progress((i + 1) / len(tickers))
+        
+        if found_count == 0:
+            st.warning("선택한 전략에 맞는 종목을 찾지 못했습니다. 😢 시장 상황을 고려하여 **전략 선택을 줄이거나** 잠시 후 다시 시도해보세요. 🧘")
+        else:
+            st.success(f"총 {found_count}개의 매수 타점 종목을 찾았습니다. 🎉")
+
+if __name__ == "__main__":
+    main()
