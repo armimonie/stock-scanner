@@ -10,14 +10,14 @@ def send_telegram_msg(bot_token, chat_id, message):
     if not bot_token or not chat_id:
         return
     try:
-        url = f"https://api.telegram.com/bot{bot_token}/sendMessage"
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         params = {'chat_id': chat_id, 'text': message}
         requests.get(url, params=params)
     except Exception as e:
         st.error(f"텔레그램 전송 실패: {e}")
 
 # ---------------------------------------------------------
-# 1. 데이터 분석 및 다중 전략 체크 함수 (V4.4 - 안정성 극대화)
+# 1. 데이터 분석 및 다중 전략 체크 함수 (V4.4 로직 유지)
 # ---------------------------------------------------------
 def safe_rolling_mean(series, window):
     return series.rolling(window=window).mean()
@@ -50,7 +50,7 @@ def calculate_indicators(df):
         
         # 볼린저 밴드
         df_copy['BB_Mid'] = safe_rolling_mean(df_copy['Close'], 20)
-        std_dev = safe_rolling_std(df_copy['Close'], 20).fillna(0) # std 계산 오류 및 NaN 처리 강화
+        std_dev = safe_rolling_std(df_copy['Close'], 20).fillna(0) 
         df_copy['BB_Upper'] = df_copy['BB_Mid'] + (std_dev * 2) 
         df_copy['BB_Lower'] = df_copy['BB_Mid'] - (std_dev * 2) 
         
@@ -63,7 +63,7 @@ def calculate_indicators(df):
         
     except Exception as e:
         # 지표 계산 실패 시 빈 데이터프레임 반환 (analyze_stock에서 처리)
-        st.error(f"지표 계산 중 치명적 오류 발생: {e}")
+        # st.error(f"지표 계산 중 치명적 오류 발생: {e}") # V5.0에서는 오류 메시지를 숨김
         return pd.DataFrame()
 
     return df_copy
@@ -71,16 +71,18 @@ def calculate_indicators(df):
 def analyze_stock(ticker, selected_strategies):
     # 데이터 가져오기 (최근 1년 데이터)
     try:
+        # yfinance는 데이터 다운로드에 실패해도 오류를 뱉지 않고 빈 DataFrame을 줄 수 있음
         df = yf.download(ticker, period="1y", progress=False)
     except Exception:
         return []
 
-    if df.empty or len(df) < 120:
+    # 데이터가 비어있거나, 분석에 필요한 120일치 데이터가 없거나, 데이터프레임이 엉망이면 건너뜀
+    if df.empty or len(df) < 120 or 'Close' not in df.columns:
         return []
 
     df = calculate_indicators(df)
     
-    # 지표 계산에 실패했을 경우 (V4.4에서 추가된 안정성 체크)
+    # 지표 계산에 실패했을 경우 (빈 DataFrame 반환 시)
     if df.empty or 'MA5' not in df.columns:
         return []
 
@@ -116,9 +118,11 @@ def analyze_stock(ticker, selected_strategies):
 
     # 전략 D: 52주 신고가/BB 상단 돌파
     if "D. 52주 신고가/BB 상단 돌파" in selected_strategies:
-        if today['Close'] > today['52Wk_High'] * 0.995: 
+        # 52Wk_High가 NaN이 아닐 때만 체크
+        if not pd.isna(today['52Wk_High']) and today['Close'] > today['52Wk_High'] * 0.995: 
             matched_reasons.append({"strategy": "D. 52주 신고가 근접", "reason": "🌟 52주 신고가 근접/돌파하며 강세 추세가 이어지는 시점."})
-        if today['Close'] > today['BB_Upper']:
+        # BB_Upper가 NaN이 아닐 때만 체크
+        if not pd.isna(today['BB_Upper']) and today['Close'] > today['BB_Upper']:
             matched_reasons.append({"strategy": "D. 볼린저밴드 상단 돌파", "reason": "⚡ 볼린저밴드 상단을 돌파하며 추세 확장 신호 발생."})
 
     # 전략 E: 단기 추세 정배열 돌파
@@ -136,17 +140,19 @@ def analyze_stock(ticker, selected_strategies):
 
     # 전략 G: RSI 40 이하 반등
     if "G. RSI 40 이하 반등" in selected_strategies:
-        if today['RSI'] <= 40 and today['Close'] > today['Open']:
+        # RSI 값이 NaN이 아닐 때만 체크
+        if not pd.isna(today['RSI']) and today['RSI'] <= 40 and today['Close'] > today['Open']:
              matched_reasons.append({"strategy": "G. RSI 40 이하 반등", "reason": f"🧘 RSI({today['RSI']:.1f})가 40 이하로 떨어져 과매도 영역 진입 후 반등."})
             
     return matched_reasons
 
 # ---------------------------------------------------------
-# 2. 차트 시각화 함수 (V4.4 - 변화 없음)
+# 2. 차트 시각화 함수 (V5.0 - 변화 없음)
 # ---------------------------------------------------------
 def plot_chart(ticker, df, strategy_type, analyst_rec):
-    if 'MA5' not in df.columns:
-        df = calculate_indicators(df)
+    # df가 비어있거나 필수 컬럼이 없으면 차트 생성 불가
+    if df.empty or 'MA5' not in df.columns:
+        return None
         
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [3, 1]})
     
@@ -188,6 +194,7 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
 # 3. 메인 앱 UI (Streamlit)
 # ---------------------------------------------------------
 def get_stock_info(ticker):
+    """티커 정보, 마켓캡, 애널리스트 의견을 가져오는 헬퍼 함수"""
     ticker_obj = yf.Ticker(ticker)
     try:
         info = ticker_obj.info
@@ -202,13 +209,17 @@ def display_ticker_info(ticker, df, analyst_rec):
     st.markdown(f"**🗣️ 애널리스트 의견:** **{analyst_rec.upper()}**")
     
     fig = plot_chart(ticker, df, "개별 조회", analyst_rec)
-    st.pyplot(fig)
+    if fig:
+        st.pyplot(fig)
+    else:
+        st.warning(f"티커 {ticker}의 차트 데이터를 불러오거나 계산하는 데 문제가 발생했습니다.")
+        
     st.markdown("---")
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V4.4", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V4.4 - 최종 안정화)")
+    st.set_page_config(page_title="AI Trading Scanner V5.0", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V5.0 - 자동 종목 로딩)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
@@ -216,7 +227,7 @@ def main():
     st.sidebar.header("1️⃣ 개별 종목 분석")
     single_ticker = st.sidebar.text_input("티커 개별 조회 (예: 005930.KS)", "AAPL")
     
-    # --- 2️⃣ 다중 전략 선택 (Multiselect) ---
+    # --- 2️⃣ 타점 전략 선택 (Multiselect) ---
     st.sidebar.header("2️⃣ 타점 전략 선택 (다중 선택 가능)")
     all_strategies = [
         "A. 강력 수급 폭발 (2.5배 거래량)",
@@ -227,12 +238,14 @@ def main():
         "F. 장대양봉 및 짧은 꼬리",
         "G. RSI 40 이하 반등",
     ]
-    selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies, default=["B. 단기/장기 정배열 골든크로스", "C. 매집 박스권 강한 돌파"])
+    # 사용자가 이전 선택을 유지하도록 default 값 제거
+    selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies)
 
-    # --- 3️⃣ 스캔할 종목 목록 ---
+    # --- 3️⃣ 스캔할 종목 목록 (V5.0: 안정적인 대형주 자동 로딩) ---
     st.sidebar.header("3️⃣ 스캔할 종목 목록")
-    # 스크린샷에 보이는 티커를 기본값으로 제공
-    default_tickers = "005930.KS, 000660.KS, 207940.KS, 005490.KS, 035420.KS, 086960.KQ, 072560.KQ, 137450.KQ, 078350.KQ, 053800.KQ, 067630.KQ, 083900.KQ, 078020.KQ, 065510.KQ, 060250.KQ, 084650.KQ, 071850.KQ, 084990.KQ"
+    # 시가총액 상위 종목 중 오류가 적은 안정적인 티커 20개 (V5.0 기본 리스트)
+    default_tickers = "005930.KS, 000660.KS, 207940.KS, 068270.KS, 005490.KS, 035420.KS, 035720.KS, 005380.KS, 000270.KS, 051910.KS, 032830.KS, 015760.KS, 086790.KS, 028260.KS, 006400.KS, 009150.KS, 034730.KS, 096770.KS, 105560.KS, 003490.KS"
+    st.sidebar.markdown("이 리스트는 **코스피 대형주 20개**로 자동 설정됩니다. (직접 수정 가능)")
     tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", default_tickers) 
     
     # --- 4️⃣ 텔레그램 알림 설정 ---
@@ -246,7 +259,7 @@ def main():
     if st.sidebar.button("📊 개별 종목 분석"):
         try:
             data = yf.download(single_ticker, period="1y", progress=False)
-            if not data.empty and len(data) >= 120:
+            if not data.empty and len(data) >= 120 and 'Close' in data.columns:
                 data = calculate_indicators(data)
                 _, _, analyst_rec = get_stock_info(single_ticker)
                 display_ticker_info(single_ticker, data, analyst_rec)
@@ -259,10 +272,10 @@ def main():
 
     if st.button("🔍 타점 전략 스캔 시작"):
         if not selected_strategies:
-            st.warning("분석할 전략을 1개 이상 선택해주세요.")
+            st.warning("분석할 전략을 1개 이상 선택해주세요. 🧘")
             return
 
-        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 시장을 스캔합니다...")
+        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 시가총액 상위 20 종목을 스캔합니다...")
         
         tickers = [t.strip() for t in tickers_input.split(',') if t.strip()]
         found_count = 0
@@ -293,7 +306,8 @@ def main():
                         
                         # 차트 시각화
                         fig = plot_chart(ticker, data_for_plot, match['strategy'], analyst_rec)
-                        st.pyplot(fig)
+                        if fig:
+                            st.pyplot(fig)
                         
                         # 텔레그램 전송
                         if enable_alert and tg_token and tg_chat_id:
@@ -306,9 +320,9 @@ def main():
             progress_bar.progress((i + 1) / len(tickers))
         
         if found_count == 0:
-            st.warning("현재 선택한 다중 전략에 맞는 종목이 없습니다. 시장 상황을 고려하여 **전략 선택을 줄이거나** 티커 목록을 더 추가해보세요. 🧘")
+            st.warning("선택한 전략에 맞는 종목을 찾지 못했습니다. 😢 시장 상황을 고려하여 **전략 선택을 줄이거나** 잠시 후 다시 시도해보세요. 🧘")
         else:
-            st.success(f"총 {found_count}개의 매수 타점 종목을 찾았습니다.")
+            st.success(f"총 {found_count}개의 매수 타점 종목을 찾았습니다. 🎉")
 
 if __name__ == "__main__":
     main()
