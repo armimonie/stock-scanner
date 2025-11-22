@@ -10,51 +10,63 @@ def send_telegram_msg(bot_token, chat_id, message):
     if not bot_token or not chat_id:
         return
     try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        url = f"https://api.telegram.com/bot{bot_token}/sendMessage"
         params = {'chat_id': chat_id, 'text': message}
         requests.get(url, params=params)
     except Exception as e:
         st.error(f"텔레그램 전송 실패: {e}")
 
 # ---------------------------------------------------------
-# 1. 데이터 분석 및 다중 전략 체크 함수
+# 1. 데이터 분석 및 다중 전략 체크 함수 (V4.4 - 안정성 극대화)
 # ---------------------------------------------------------
+def safe_rolling_mean(series, window):
+    return series.rolling(window=window).mean()
+
+def safe_rolling_std(series, window):
+    # rolling 계산 중 발생하는 오류 방지
+    try:
+        return series.rolling(window=window).std()
+    except:
+        return pd.Series(np.nan, index=series.index)
+
 def calculate_indicators(df):
-    # try-except로 감싸서 지표 계산 중 오류 발생 시 NaN으로 처리 후 다음 지표로 넘어가도록 처리 (V4.3 핵심 수정)
+    
+    # 데이터프레임 복사본 생성 (원본 보호)
+    df_copy = df.copy()
+
     try:
         # 이평선
-        df['MA5'] = df['Close'].rolling(window=5).mean()
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['MA60'] = df['Close'].rolling(window=60).mean()
-        df['MA120'] = df['Close'].rolling(window=120).mean()
+        df_copy['MA5'] = safe_rolling_mean(df_copy['Close'], 5)
+        df_copy['MA20'] = safe_rolling_mean(df_copy['Close'], 20)
+        df_copy['MA60'] = safe_rolling_mean(df_copy['Close'], 60)
+        df_copy['MA120'] = safe_rolling_mean(df_copy['Close'], 120)
         
         # RSI
-        delta = df['Close'].diff(1)
+        delta = df_copy['Close'].diff(1)
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+        df_copy['RSI'] = 100 - (100 / (1 + rs))
         
         # 볼린저 밴드
-        df['BB_Mid'] = df['Close'].rolling(window=20).mean()
-        # 오류 발생 지점 방지: std 계산에 실패하면 0으로 처리
-        std_dev = df['Close'].rolling(window=20).std()
-        df['BB_Upper'] = df['BB_Mid'] + (std_dev.fillna(0) * 2) # fillna(0) 추가
-        df['BB_Lower'] = df['BB_Mid'] - (std_dev.fillna(0) * 2) # fillna(0) 추가
+        df_copy['BB_Mid'] = safe_rolling_mean(df_copy['Close'], 20)
+        std_dev = safe_rolling_std(df_copy['Close'], 20).fillna(0) # std 계산 오류 및 NaN 처리 강화
+        df_copy['BB_Upper'] = df_copy['BB_Mid'] + (std_dev * 2) 
+        df_copy['BB_Lower'] = df_copy['BB_Mid'] - (std_dev * 2) 
         
         # 거래량 평균
-        df['VolMA20'] = df['Volume'].rolling(window=20).mean()
+        df_copy['VolMA20'] = safe_rolling_mean(df_copy['Volume'], 20)
 
         # 52주 데이터
-        df['52Wk_High'] = df['High'].rolling(window=252).max()
-        df['52Wk_Low'] = df['Low'].rolling(window=252).min()
+        df_copy['52Wk_High'] = df_copy['High'].rolling(window=252).max()
+        df_copy['52Wk_Low'] = df_copy['Low'].rolling(window=252).min()
         
     except Exception as e:
-        # 지표 계산 실패 시 모든 지표를 NaN으로 채워서 반환 (analyze_stock에서 처리)
-        st.error(f"지표 계산 오류 발생: {e}")
-        return pd.DataFrame(index=df.index)
+        # 지표 계산 실패 시 빈 데이터프레임 반환 (analyze_stock에서 처리)
+        st.error(f"지표 계산 중 치명적 오류 발생: {e}")
+        return pd.DataFrame()
 
-    return df
+    return df_copy
 
 def analyze_stock(ticker, selected_strategies):
     # 데이터 가져오기 (최근 1년 데이터)
@@ -68,7 +80,7 @@ def analyze_stock(ticker, selected_strategies):
 
     df = calculate_indicators(df)
     
-    # 지표 계산에 실패했을 경우 (V4.3에서 추가된 안정성 체크)
+    # 지표 계산에 실패했을 경우 (V4.4에서 추가된 안정성 체크)
     if df.empty or 'MA5' not in df.columns:
         return []
 
@@ -76,6 +88,10 @@ def analyze_stock(ticker, selected_strategies):
     today = df.iloc[-1]
     yesterday = df.iloc[-2]
     
+    # NaN 값 체크 (계산이 제대로 안된 경우)
+    if pd.isna(today['MA5']) or pd.isna(yesterday['MA5']):
+         return []
+         
     matched_reasons = []
 
     # ================= V4.1 완화된 다중 전략 로직 (유지) =================
@@ -126,7 +142,7 @@ def analyze_stock(ticker, selected_strategies):
     return matched_reasons
 
 # ---------------------------------------------------------
-# 2. 차트 시각화 함수 (V4.3 - 변화 없음)
+# 2. 차트 시각화 함수 (V4.4 - 변화 없음)
 # ---------------------------------------------------------
 def plot_chart(ticker, df, strategy_type, analyst_rec):
     if 'MA5' not in df.columns:
@@ -140,7 +156,7 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
     ax1.plot(df.index, df['MA60'], label='MA60', color='orange')
     ax1.plot(df.index, df['MA120'], label='MA120', color='red', alpha=0.5)
 
-    if "볼린저밴드 상단 돌파" in strategy_type and 'BB_Upper' in df.columns:
+    if 'BB_Upper' in df.columns:
         ax1.plot(df.index, df['BB_Upper'], 'g--', label='BB Upper', alpha=0.5)
         ax1.plot(df.index, df['BB_Lower'], 'r--', label='BB Lower', alpha=0.5)
         ax1.fill_between(df.index, df['BB_Upper'], df['BB_Lower'], color='gray', alpha=0.05)
@@ -172,7 +188,6 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
 # 3. 메인 앱 UI (Streamlit)
 # ---------------------------------------------------------
 def get_stock_info(ticker):
-    """티커 정보, 마켓캡, 애널리스트 의견을 가져오는 헬퍼 함수"""
     ticker_obj = yf.Ticker(ticker)
     try:
         info = ticker_obj.info
@@ -192,8 +207,8 @@ def display_ticker_info(ticker, df, analyst_rec):
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V4.3", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V4.3 - 안정성 강화)")
+    st.set_page_config(page_title="AI Trading Scanner V4.4", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V4.4 - 최종 안정화)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
@@ -214,11 +229,13 @@ def main():
     ]
     selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies, default=["B. 단기/장기 정배열 골든크로스", "C. 매집 박스권 강한 돌파"])
 
-    # --- 3️⃣ 스캔할 종목 목록 (시총 필터 제거) ---
+    # --- 3️⃣ 스캔할 종목 목록 ---
     st.sidebar.header("3️⃣ 스캔할 종목 목록")
-    tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", "AAPL, TSLA, NVDA, 005930.KS, 035420.KS") 
+    # 스크린샷에 보이는 티커를 기본값으로 제공
+    default_tickers = "005930.KS, 000660.KS, 207940.KS, 005490.KS, 035420.KS, 086960.KQ, 072560.KQ, 137450.KQ, 078350.KQ, 053800.KQ, 067630.KQ, 083900.KQ, 078020.KQ, 065510.KQ, 060250.KQ, 084650.KQ, 071850.KQ, 084990.KQ"
+    tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", default_tickers) 
     
-    # --- 4️⃣ 텔레그램 알림 설정 (V2.0과 동일) ---
+    # --- 4️⃣ 텔레그램 알림 설정 ---
     st.sidebar.header("4️⃣ 텔레그램 알림 설정")
     tg_token = st.sidebar.text_input("봇 토큰 (Bot Token)", type="password")
     tg_chat_id = st.sidebar.text_input("챗 ID (Chat ID)")
@@ -229,14 +246,14 @@ def main():
     if st.sidebar.button("📊 개별 종목 분석"):
         try:
             data = yf.download(single_ticker, period="1y", progress=False)
-            if not data.empty:
-                data = calculate_indicators(data) # 지표 계산 추가
+            if not data.empty and len(data) >= 120:
+                data = calculate_indicators(data)
                 _, _, analyst_rec = get_stock_info(single_ticker)
                 display_ticker_info(single_ticker, data, analyst_rec)
             else:
-                st.error(f"티커 '{single_ticker}'의 데이터를 찾을 수 없습니다. (한국 주식은 000000.KS 또는 .KQ 확인)")
-        except Exception:
-            st.error(f"티커 '{single_ticker}' 데이터 조회 중 오류가 발생했습니다. 티커를 다시 확인해 주세요.")
+                st.error(f"티커 '{single_ticker}'의 데이터가 부족하거나 찾을 수 없습니다.")
+        except Exception as e:
+            st.error(f"티커 '{single_ticker}' 데이터 조회 중 오류가 발생했습니다: {e}")
 
     st.markdown("---")
 
