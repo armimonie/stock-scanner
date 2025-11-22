@@ -20,31 +20,40 @@ def send_telegram_msg(bot_token, chat_id, message):
 # 1. 데이터 분석 및 다중 전략 체크 함수
 # ---------------------------------------------------------
 def calculate_indicators(df):
-    # 이평선
-    df['MA5'] = df['Close'].rolling(window=5).mean()
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    df['MA60'] = df['Close'].rolling(window=60).mean()
-    df['MA120'] = df['Close'].rolling(window=120).mean()
-    
-    # RSI
-    delta = df['Close'].diff(1)
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    # 볼린저 밴드
-    df['BB_Mid'] = df['Close'].rolling(window=20).mean()
-    df['BB_Upper'] = df['BB_Mid'] + (df['Close'].rolling(window=20).std() * 2)
-    df['BB_Lower'] = df['BB_Mid'] - (df['Close'].rolling(window=20).std() * 2)
-    
-    # 거래량 평균
-    df['VolMA20'] = df['Volume'].rolling(window=20).mean()
+    # try-except로 감싸서 지표 계산 중 오류 발생 시 NaN으로 처리 후 다음 지표로 넘어가도록 처리 (V4.3 핵심 수정)
+    try:
+        # 이평선
+        df['MA5'] = df['Close'].rolling(window=5).mean()
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['MA60'] = df['Close'].rolling(window=60).mean()
+        df['MA120'] = df['Close'].rolling(window=120).mean()
+        
+        # RSI
+        delta = df['Close'].diff(1)
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+        
+        # 볼린저 밴드
+        df['BB_Mid'] = df['Close'].rolling(window=20).mean()
+        # 오류 발생 지점 방지: std 계산에 실패하면 0으로 처리
+        std_dev = df['Close'].rolling(window=20).std()
+        df['BB_Upper'] = df['BB_Mid'] + (std_dev.fillna(0) * 2) # fillna(0) 추가
+        df['BB_Lower'] = df['BB_Mid'] - (std_dev.fillna(0) * 2) # fillna(0) 추가
+        
+        # 거래량 평균
+        df['VolMA20'] = df['Volume'].rolling(window=20).mean()
 
-    # 52주 데이터
-    df['52Wk_High'] = df['High'].rolling(window=252).max()
-    df['52Wk_Low'] = df['Low'].rolling(window=252).min()
-    
+        # 52주 데이터
+        df['52Wk_High'] = df['High'].rolling(window=252).max()
+        df['52Wk_Low'] = df['Low'].rolling(window=252).min()
+        
+    except Exception as e:
+        # 지표 계산 실패 시 모든 지표를 NaN으로 채워서 반환 (analyze_stock에서 처리)
+        st.error(f"지표 계산 오류 발생: {e}")
+        return pd.DataFrame(index=df.index)
+
     return df
 
 def analyze_stock(ticker, selected_strategies):
@@ -58,6 +67,10 @@ def analyze_stock(ticker, selected_strategies):
         return []
 
     df = calculate_indicators(df)
+    
+    # 지표 계산에 실패했을 경우 (V4.3에서 추가된 안정성 체크)
+    if df.empty or 'MA5' not in df.columns:
+        return []
 
     # 최신 데이터 기준
     today = df.iloc[-1]
@@ -113,7 +126,7 @@ def analyze_stock(ticker, selected_strategies):
     return matched_reasons
 
 # ---------------------------------------------------------
-# 2. 차트 시각화 함수 (V4.2 - 변화 없음)
+# 2. 차트 시각화 함수 (V4.3 - 변화 없음)
 # ---------------------------------------------------------
 def plot_chart(ticker, df, strategy_type, analyst_rec):
     if 'MA5' not in df.columns:
@@ -127,7 +140,7 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
     ax1.plot(df.index, df['MA60'], label='MA60', color='orange')
     ax1.plot(df.index, df['MA120'], label='MA120', color='red', alpha=0.5)
 
-    if "볼린저밴드 상단 돌파" in strategy_type:
+    if "볼린저밴드 상단 돌파" in strategy_type and 'BB_Upper' in df.columns:
         ax1.plot(df.index, df['BB_Upper'], 'g--', label='BB Upper', alpha=0.5)
         ax1.plot(df.index, df['BB_Lower'], 'r--', label='BB Lower', alpha=0.5)
         ax1.fill_between(df.index, df['BB_Upper'], df['BB_Lower'], color='gray', alpha=0.05)
@@ -136,10 +149,14 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
     ax1.grid(True, alpha=0.3)
     ax1.legend()
 
-    ax2.plot(df.index, df['RSI'], label='RSI (14)', color='purple')
-    ax2.axhline(40, color='orange', linestyle='--', label='RSI 40')
-    ax2.axhline(30, color='red', linestyle='--', label='RSI 30')
-    ax2.set_title("RSI Indicator")
+    if 'RSI' in df.columns:
+        ax2.plot(df.index, df['RSI'], label='RSI (14)', color='purple')
+        ax2.axhline(40, color='orange', linestyle='--', label='RSI 40')
+        ax2.axhline(30, color='red', linestyle='--', label='RSI 30')
+        ax2.set_title("RSI Indicator")
+    else:
+        ax2.set_title("RSI Indicator (Data Error)")
+
     
     ax2_vol = ax2.twinx()
     ax2_vol.bar(df.index, df['Volume'], color='gray', alpha=0.3, label='Volume')
@@ -175,8 +192,8 @@ def display_ticker_info(ticker, df, analyst_rec):
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V4.2", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V4.2 - 오류 처리 강화)")
+    st.set_page_config(page_title="AI Trading Scanner V4.3", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V4.3 - 안정성 강화)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
@@ -195,7 +212,7 @@ def main():
         "F. 장대양봉 및 짧은 꼬리",
         "G. RSI 40 이하 반등",
     ]
-    selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies, default=["B. 단기/장기 정배열 골든크로스", "C. 매집 박스권 강한 돌파", "A. 강력 수급 폭발 (2.5배 거래량)"])
+    selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies, default=["B. 단기/장기 정배열 골든크로스", "C. 매집 박스권 강한 돌파"])
 
     # --- 3️⃣ 스캔할 종목 목록 (시총 필터 제거) ---
     st.sidebar.header("3️⃣ 스캔할 종목 목록")
@@ -213,6 +230,7 @@ def main():
         try:
             data = yf.download(single_ticker, period="1y", progress=False)
             if not data.empty:
+                data = calculate_indicators(data) # 지표 계산 추가
                 _, _, analyst_rec = get_stock_info(single_ticker)
                 display_ticker_info(single_ticker, data, analyst_rec)
             else:
@@ -249,7 +267,9 @@ def main():
                     st.markdown(f"**📈 시가총액:** 약 {market_cap_usd:,.1f} 억 달러")
                     st.markdown(f"**🗣️ 애널리스트 의견:** **{analyst_rec.upper()}**")
                     
+                    # 데이터를 다시 다운로드하고 지표 계산 (차트용)
                     data_for_plot = yf.download(ticker, period="1y", progress=False)
+                    data_for_plot = calculate_indicators(data_for_plot)
 
                     for match in matched_reasons:
                         st.info(f"**[{match['strategy']}]** {match['reason']}")
@@ -269,7 +289,7 @@ def main():
             progress_bar.progress((i + 1) / len(tickers))
         
         if found_count == 0:
-            st.warning("현재 선택한 다중 전략과 완화된 필터 조건에도 맞는 종목이 없습니다. 시장 상황을 고려하여 **전략 선택을 줄이거나** 티커 목록을 더 추가해보세요. 🧘")
+            st.warning("현재 선택한 다중 전략에 맞는 종목이 없습니다. 시장 상황을 고려하여 **전략 선택을 줄이거나** 티커 목록을 더 추가해보세요. 🧘")
         else:
             st.success(f"총 {found_count}개의 매수 타점 종목을 찾았습니다.")
 
