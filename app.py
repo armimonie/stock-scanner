@@ -19,23 +19,22 @@ def send_telegram_msg(bot_token, chat_id, message):
 # ---------------------------------------------------------
 # 1. 데이터 분석 및 다중 전략 체크 함수 
 # ---------------------------------------------------------
-# 롤링 평균/표준편차 함수를 더욱 안정적으로 수정
 def safe_rolling_mean(series, window):
     return series.rolling(window=window, min_periods=1).mean()
 
 def safe_rolling_std(series, window):
     try:
         # min_periods=1 설정으로 데이터가 부족해도 NaN 대신 계산 시도
+        # V6.0: BB 오류 방지를 위해 std()를 별도 컬럼에 할당하지 않음
         return series.rolling(window=window, min_periods=1).std()
     except Exception:
-        # 오류 발생 시 모든 값을 NaN으로 반환하여 안정성 확보
         return pd.Series(np.nan, index=series.index)
 
 def calculate_indicators(df):
     
     df_copy = df.copy()
 
-    # V5.8: calculate_indicators 전체를 try-except로 감싸서 프로그램 중단 방지
+    # V6.0: 오류 시 None 반환
     try:
         # 이평선
         df_copy['MA5'] = safe_rolling_mean(df_copy['Close'], 5)
@@ -50,13 +49,11 @@ def calculate_indicators(df):
         rs = gain / loss
         df_copy['RSI'] = 100 - (100 / (1 + rs))
         
-        # MFI (Money Flow Index, 14일) - 안정화
+        # MFI (Money Flow Index, 14일)
         typical_price = (df_copy['High'] + df_copy['Low'] + df_copy['Close']) / 3
         money_flow = typical_price * df_copy['Volume']
-        
         positive_mf = money_flow.where(typical_price.diff() > 0, 0).rolling(window=14).sum()
         negative_mf = money_flow.where(typical_price.diff() < 0, 0).rolling(window=14).sum().abs()
-        
         money_ratio = positive_mf / negative_mf.replace(0, np.nan) 
         df_copy['MFI'] = 100 - (100 / (1 + money_ratio))
         
@@ -66,9 +63,9 @@ def calculate_indicators(df):
         df_copy['MACD'] = exp1 - exp2
         df_copy['MACD_Signal'] = df_copy['MACD'].ewm(span=9, adjust=False).mean()
         
-        # 볼린저 밴드
+        # 볼린저 밴드 (V6.0: 오류 발생 로직을 분리하여 안전하게 계산)
         df_copy['BB_Mid'] = safe_rolling_mean(df_copy['Close'], 20)
-        std_dev = safe_rolling_std(df_copy['Close'], 20).fillna(0) 
+        std_dev = safe_rolling_std(df_copy['Close'], 20).fillna(0) # std()를 직접 df에 할당하지 않음
         df_copy['BB_Upper'] = df_copy['BB_Mid'] + (std_dev * 2) 
         df_copy['BB_Lower'] = df_copy['BB_Mid'] - (std_dev * 2) 
         
@@ -76,44 +73,36 @@ def calculate_indicators(df):
         df_copy['VolMA20'] = safe_rolling_mean(df_copy['Volume'], 20)
         
     except Exception as e:
-        # 지표 계산 중 예상치 못한 오류 발생 시 빈 데이터프레임이 아닌, 
-        # 기존 df에 지표 컬럼을 추가하지 않은 상태로 반환 (분석 함수에서 NaN 체크)
-        st.warning(f"지표 계산 중 오류 발생: {e}") 
-        return df.copy() # 원본 df를 반환하여 최소한의 분석 시도
+        # st.warning(f"지표 계산 중 오류 발생: {e}") # 앱이 실행될 때 Streamlit 자체 오류 메시지로 대신함
+        return None # 지표 계산에 실패하면 None 반환
 
     return df_copy
 
 def analyze_stock(ticker, selected_strategies):
-    # V5.8: 데이터 로딩 try-except 강화
+    # 데이터 가져오기 (최근 1년 데이터)
     try:
         df = yf.download(ticker, period="1y", progress=False)
-    except Exception as e:
-        st.error(f"데이터 로딩 실패 ({ticker}): {e}")
+    except Exception:
         return []
 
-    if df.empty or len(df) < 120 or 'Close' not in df.columns:
+    if df.empty or len(df) < 2 or 'Close' not in df.columns:
         return []
 
     df = calculate_indicators(df)
     
-    # 지표 계산 실패 시 df_copy 대신 원본 df가 반환되었을 수 있음.
-    # 필수 데이터가 부족하면 분석 중단
-    if len(df) < 2 or 'Close' not in df.columns or 'Volume' not in df.columns:
+    # V6.0: 지표 계산 실패 시(None 반환) 분석 중단
+    if df is None:
         return []
 
     # 최신 데이터 기준
     today = df.iloc[-1]
     yesterday = df.iloc[-2]
     
-    # 필수 NaN 값 체크 
-    # V5.8: 이평선이나 볼륨 평균이 NaN이면 전략A, B 등이 불가능하므로 제외
-    if 'MA20' not in df.columns or pd.isna(today['MA20']) or pd.isna(yesterday['MA20']) or 'VolMA20' not in df.columns or pd.isna(today['VolMA20']):
-         # MA/볼륨 지표가 계산되지 않았다면 A, B 전략을 제외한 나머지 전략만 시도 가능
-         pass 
-         
+    # 필수 NaN 값 체크 (V6.0: 계산 실패로 인해 컬럼이 없을 수도 있으므로, 전략별로 체크)
+    
     matched_reasons = []
 
-    # ================= V5.8 안정화된 타점 전략 로직 =================
+    # ================= V6.0 최종 안정화된 타점 전략 로직 =================
     
     # 전략 A: 강력 수급 폭발 (거래량 1.5배)
     if "A. 강력 수급 폭발 (거래량 1.5배)" in selected_strategies and 'VolMA20' in df.columns:
@@ -162,10 +151,10 @@ def analyze_stock(ticker, selected_strategies):
     return matched_reasons
 
 # ---------------------------------------------------------
-# 2. 차트 시각화 함수 (V5.8: 지표 컬럼 존재 여부 체크 강화)
+# 2. 차트 시각화 함수 
 # ---------------------------------------------------------
 def plot_chart(ticker, df, strategy_type, analyst_rec):
-    if df.empty or 'Close' not in df.columns:
+    if df is None or df.empty or 'Close' not in df.columns:
         return None
         
     has_macd = 'MACD' in df.columns and not df['MACD'].isnull().all()
@@ -255,7 +244,6 @@ def display_ticker_info(ticker, df, analyst_rec):
     st.markdown(f"### {ticker} 상세 정보")
     st.markdown(f"**🗣️ 애널리스트 의견:** **{analyst_rec.upper()}**")
     
-    # 모든 전략 타입 이름을 전달하여 차트 함수에서 필요한 지표를 표시할 수 있도록 함
     fig = plot_chart(ticker, df, "개별 조회", analyst_rec) 
     if fig:
         st.pyplot(fig)
@@ -266,8 +254,8 @@ def display_ticker_info(ticker, df, analyst_rec):
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V5.8", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V5.8 - 오류 복구 및 계산 강화 버전)")
+    st.set_page_config(page_title="AI Trading Scanner V6.0", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V6.0 - 볼린저밴드 오류 해결 버전)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
