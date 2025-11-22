@@ -48,14 +48,14 @@ def calculate_indicators(df):
         rs = gain / loss
         df_copy['RSI'] = 100 - (100 / (1 + rs))
         
-        # MFI (Money Flow Index, 14일)
+        # MFI (Money Flow Index, 14일) - V5.7.2 안정화
         typical_price = (df_copy['High'] + df_copy['Low'] + df_copy['Close']) / 3
         money_flow = typical_price * df_copy['Volume']
         
         positive_mf = money_flow.where(typical_price.diff() > 0, 0).rolling(window=14).sum()
         negative_mf = money_flow.where(typical_price.diff() < 0, 0).rolling(window=14).sum().abs()
         
-        # Division by zero prevention for Money Ratio
+        # 분모(negative_mf)가 0일 경우 NaN 처리하여 ZeroDivisionError 방지
         money_ratio = positive_mf / negative_mf.replace(0, np.nan) 
         df_copy['MFI'] = 100 - (100 / (1 + money_ratio))
         
@@ -87,31 +87,31 @@ def analyze_stock(ticker, selected_strategies):
     except Exception:
         return []
 
+    # 데이터가 너무 적거나 컬럼이 없으면 분석 불가
     if df.empty or len(df) < 120 or 'Close' not in df.columns:
         return []
 
     df = calculate_indicators(df)
     
     # 지표 계산에 실패했을 경우 
-    if df.empty or 'MA5' not in df.columns or 'MACD' not in df.columns:
+    if df.empty or 'MA5' not in df.columns:
         return []
 
     # 최신 데이터 기준
     today = df.iloc[-1]
     yesterday = df.iloc[-2]
     
-    # NaN 값 체크 
-    if pd.isna(today['MA20']) or pd.isna(yesterday['MA20']):
+    # 필수 NaN 값 체크 (단순 이평선이나 볼륨 평균이 NaN이면 분석 불가로 간주)
+    if pd.isna(today['MA20']) or pd.isna(yesterday['MA20']) or pd.isna(today['VolMA20']):
          return []
          
     matched_reasons = []
 
-    # ================= V5.7 최종 타점 전략 로직 =================
+    # ================= V5.7.2 안정화된 타점 전략 로직 =================
     
     # 전략 A: 강력 수급 폭발 (거래량 1.5배)
     if "A. 강력 수급 폭발 (거래량 1.5배)" in selected_strategies:
-        # 1.5배 거래량 증가 + 양봉 마감
-        if today['Volume'] > (today['VolMA20'] * 1.5) and today['Close'] > today['Open']:
+        if not pd.isna(today['Volume']) and today['Volume'] > (today['VolMA20'] * 1.5) and today['Close'] > today['Open']:
             pct_change = ((today['Close'] - yesterday['Close']) / yesterday['Close']) * 100
             matched_reasons.append({"strategy": "A. 강력 수급 폭발", "reason": f"🔥 거래량이 평소 1.5배 이상 터지며 {pct_change:.2f}% 급등했습니다. (강한 매수 유입)"})
 
@@ -122,26 +122,24 @@ def analyze_stock(ticker, selected_strategies):
 
     # 전략 C: RSI 과매도 반등 (30 이하)
     if "C. RSI 과매도 반등 (30 이하)" in selected_strategies:
-        # RSI가 NaN이 아니고, RSI가 30 이하에서 벗어나며 주가가 양봉으로 마감
-        if not pd.isna(today['RSI']) and yesterday['RSI'] <= 30 and today['RSI'] > yesterday['RSI'] and today['Close'] > today['Open']:
+        if not pd.isna(today['RSI']) and not pd.isna(yesterday['RSI']) and \
+           yesterday['RSI'] <= 30 and today['RSI'] > yesterday['RSI'] and today['Close'] > today['Open']:
             matched_reasons.append({"strategy": "C. RSI 과매도 반등", "reason": f"📈 RSI({today['RSI']:.1f})가 30 이하 과매도 구간에서 벗어나며 **단기 강력 반등 시그널** 포착."})
 
     # 전략 D: MACD 시그널선 상향 돌파
     if "D. MACD 시그널선 상향 돌파" in selected_strategies:
-        # MACD 선이 시그널 선 위로 올라가는 골든크로스
-        if not pd.isna(today['MACD']) and not pd.isna(today['MACD_Signal']) and \
+        if not pd.isna(today['MACD']) and not pd.isna(today['MACD_Signal']) and not pd.isna(yesterday['MACD']) and not pd.isna(yesterday['MACD_Signal']) and \
            today['MACD'] > today['MACD_Signal'] and yesterday['MACD'] <= yesterday['MACD_Signal']:
             matched_reasons.append({"strategy": "D. MACD 골든크로스", "reason": "🌟 MACD선이 시그널선을 상향 돌파하며 **강력한 모멘텀 상승 신호** 발생."})
 
     # 전략 E: MFI 과매도 반등 (20 이하)
     if "E. MFI 과매도 반등 (20 이하)" in selected_strategies:
-        # MFI가 NaN이 아니고, MFI가 20 이하에서 벗어나며 주가가 양봉으로 마감
-        if not pd.isna(today['MFI']) and yesterday['MFI'] <= 20 and today['MFI'] > yesterday['MFI'] and today['Close'] > today['Open']:
+        if not pd.isna(today['MFI']) and not pd.isna(yesterday['MFI']) and \
+           yesterday['MFI'] <= 20 and today['MFI'] > yesterday['MFI'] and today['Close'] > today['Open']:
             matched_reasons.append({"strategy": "E. MFI 과매도 반등", "reason": f"💰 MFI({today['MFI']:.1f})가 20 이하에서 벗어나며 **단기 자금 유입 반등 시그널** 포착."})
 
     # 전략 F: 볼린저밴드 상단 돌파
     if "F. 볼린저밴드 상단 돌파" in selected_strategies:
-        # BB_Upper가 NaN이 아닐 때만 체크
         if not pd.isna(today['BB_Upper']) and today['Close'] > today['BB_Upper']:
             matched_reasons.append({"strategy": "F. 볼린저밴드 상단 돌파", "reason": "⚡ 볼린저밴드 상단을 돌파하며 **강한 추세 확장 및 변동성 확대 신호** 발생."})
 
@@ -157,7 +155,7 @@ def analyze_stock(ticker, selected_strategies):
     return matched_reasons
 
 # ---------------------------------------------------------
-# 2. 차트 시각화 함수 
+# 2. 차트 시각화 함수 (V5.7.2 - MFI 차트 표시 조건 개선)
 # ---------------------------------------------------------
 def plot_chart(ticker, df, strategy_type, analyst_rec):
     if df.empty or 'MA5' not in df.columns:
@@ -189,21 +187,21 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
     ax1.legend(loc='upper left')
 
     # 2. RSI/MFI 및 거래량 차트 (ax2)
-    if 'RSI' in df.columns:
-        # 매칭된 전략에 MFI (전략 E)가 포함되어 있으면 MFI를 표시
-        if 'E.' in strategy_type:
-             ax2.plot(df.index, df['MFI'], label='MFI (14)', color='brown')
-             ax2.axhline(80, color='red', linestyle='--', label='MFI 80 (Overbought)')
-             ax2.axhline(50, color='blue', linestyle=':', label='MFI 50')
-             ax2.axhline(20, color='green', linestyle='--', label='MFI 20 (Oversold)')
-             ax2.set_title("MFI Indicator")
-        else: # 기본은 RSI 표시
-             ax2.plot(df.index, df['RSI'], label='RSI (14)', color='purple')
-             ax2.axhline(70, color='red', linestyle='--', label='RSI 70 (Overbought)')
-             ax2.axhline(50, color='blue', linestyle=':', label='RSI 50')
-             ax2.axhline(30, color='green', linestyle='--', label='RSI 30 (Oversold)')
-             ax2.set_title("RSI Indicator")
-
+    # 전략 E (MFI)가 매칭되었거나, 'MFI' 데이터가 있고 RSI 데이터가 없을 때 MFI를 표시
+    show_mfi = 'E.' in strategy_type or ('MFI' in df.columns and ('RSI' not in df.columns or df['RSI'].isnull().all()))
+    
+    if show_mfi and 'MFI' in df.columns and not df['MFI'].isnull().all():
+         ax2.plot(df.index, df['MFI'], label='MFI (14)', color='brown')
+         ax2.axhline(80, color='red', linestyle='--', label='MFI 80 (Overbought)')
+         ax2.axhline(50, color='blue', linestyle=':', label='MFI 50')
+         ax2.axhline(20, color='green', linestyle='--', label='MFI 20 (Oversold)')
+         ax2.set_title("MFI Indicator")
+    elif 'RSI' in df.columns and not df['RSI'].isnull().all(): # 기본은 RSI 표시
+         ax2.plot(df.index, df['RSI'], label='RSI (14)', color='purple')
+         ax2.axhline(70, color='red', linestyle='--', label='RSI 70 (Overbought)')
+         ax2.axhline(50, color='blue', linestyle=':', label='RSI 50')
+         ax2.axhline(30, color='green', linestyle='--', label='RSI 30 (Oversold)')
+         ax2.set_title("RSI Indicator")
     else:
         ax2.set_title("Momentum Indicator (Data Error)")
 
@@ -256,8 +254,8 @@ def display_ticker_info(ticker, df, analyst_rec):
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V5.7.1", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V5.7.1 - 코스피 소형주 + 코스닥 대형주 100선)")
+    st.set_page_config(page_title="AI Trading Scanner V5.7.2", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V5.7.2 - 지표 계산 안정화 버전)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
@@ -279,7 +277,7 @@ def main():
     # 사용자가 이전 선택을 유지하도록 default 값 제거
     selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies)
 
-    # --- 3️⃣ 스캔할 종목 목록 (V5.7.1: 코스피 하위 50 + 코스닥 상위 50) ---
+    # --- 3️⃣ 스캔할 종목 목록 (코스피 하위 50 + 코스닥 상위 50 유지) ---
     st.sidebar.header("3️⃣ 스캔할 종목 목록 (총 100개)")
     
     # 코스닥 상위 50개 종목 리스트 (대형주 위주)
