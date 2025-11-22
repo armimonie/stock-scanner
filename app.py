@@ -10,7 +10,7 @@ def send_telegram_msg(bot_token, chat_id, message):
     if not bot_token or not chat_id:
         return
     try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        url = f"https://api.telegram.com/bot{bot_token}/sendMessage"
         params = {'chat_id': chat_id, 'text': message}
         requests.get(url, params=params)
     except Exception as e:
@@ -57,7 +57,7 @@ def calculate_indicators(df):
         # 거래량 평균
         df_copy['VolMA20'] = safe_rolling_mean(df_copy['Volume'], 20)
 
-        # 52주 데이터
+        # 52주 데이터 (계산은 유지하되, D 전략에서만 제외)
         df_copy['52Wk_High'] = df_copy['High'].rolling(window=252).max()
         df_copy['52Wk_Low'] = df_copy['Low'].rolling(window=252).min()
         
@@ -94,13 +94,13 @@ def analyze_stock(ticker, selected_strategies):
          
     matched_reasons = []
 
-    # ================= V5.2 수정된 다중 전략 로직 유지 =================
+    # ================= V5.5 수정된 다중 전략 로직 =================
     
-    # 전략 A: 강력 수급 폭발 (2배 거래량)
-    if "A. 강력 수급 폭발 (2배 거래량)" in selected_strategies:
-        if today['Volume'] > (today['VolMA20'] * 2.0) and today['Close'] > today['Open']:
+    # 전략 A: 강력 수급 폭발 (1.5배 거래량) - V5.5 수정됨 (2배 -> 1.5배)
+    if "A. 강력 수급 폭발 (1.5배 거래량)" in selected_strategies:
+        if today['Volume'] > (today['VolMA20'] * 1.5) and today['Close'] > today['Open']:
             pct_change = ((today['Close'] - yesterday['Close']) / yesterday['Close']) * 100
-            matched_reasons.append({"strategy": "A. 강력 수급 폭발", "reason": f"🔥 거래량이 평소 2배 이상 터지며 {pct_change:.2f}% 급등했습니다. (강력한 매수세 프록시)"})
+            matched_reasons.append({"strategy": "A. 강력 수급 폭발", "reason": f"🔥 거래량이 평소 1.5배 이상 터지며 {pct_change:.2f}% 급등했습니다. (완화된 수급 강도)"})
 
     # 전략 B: 단기/장기 정배열 골든크로스
     if "B. 단기/장기 정배열 골든크로스" in selected_strategies:
@@ -114,11 +114,8 @@ def analyze_stock(ticker, selected_strategies):
         if today['Close'] > box_high * 1.01 and today['Volume'] > (today['VolMA20'] * 1.5):
             matched_reasons.append({"strategy": "C. 매집 박스권 강한 돌파", "reason": "🎯 60일 박스권 상단을 1.5배 거래량으로 돌파하며 매집 물량 소화."})
 
-    # 전략 D: 52주 신고가/BB 상단 돌파
-    if "D. 52주 신고가/BB 상단 돌파" in selected_strategies:
-        # 52Wk_High가 NaN이 아닐 때만 체크
-        if not pd.isna(today['52Wk_High']) and today['Close'] > today['52Wk_High'] * 0.995: 
-            matched_reasons.append({"strategy": "D. 52주 신고가 근접", "reason": "🌟 52주 신고가 근접/돌파하며 강세 추세가 이어지는 시점."})
+    # 전략 D: 볼린저밴드 상단 돌파 (52주 신고가 제외)
+    if "D. 볼린저밴드 상단 돌파" in selected_strategies:
         # BB_Upper가 NaN이 아닐 때만 체크
         if not pd.isna(today['BB_Upper']) and today['Close'] > today['BB_Upper']:
             matched_reasons.append({"strategy": "D. 볼린저밴드 상단 돌파", "reason": "⚡ 볼린저밴드 상단을 돌파하며 추세 확장 신호 발생."})
@@ -171,7 +168,7 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
 
     if 'RSI' in df.columns:
         ax2.plot(df.index, df['RSI'], label='RSI (14)', color='purple')
-        ax2.axhline(60, color='blue', linestyle='--', label='RSI 60 (New)') 
+        ax2.axhline(60, color='blue', linestyle='--', label='RSI 60') 
         ax2.axhline(40, color='orange', linestyle='--', label='RSI 40') 
         ax2.axhline(30, color='red', linestyle='--', label='RSI 30')
         ax2.set_title("RSI Indicator")
@@ -217,8 +214,8 @@ def display_ticker_info(ticker, df, analyst_rec):
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V5.3", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V5.3 - 코스닥 대형주 기본 설정)")
+    st.set_page_config(page_title="AI Trading Scanner V5.5", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V5.5 - A 전략 1.5배, 코스피 소형주 리스트)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
@@ -229,10 +226,10 @@ def main():
     # --- 2️⃣ 타점 전략 선택 (Multiselect) ---
     st.sidebar.header("2️⃣ 타점 전략 선택 (다중 선택 가능)")
     all_strategies = [
-        "A. 강력 수급 폭발 (2배 거래량)",
+        "A. 강력 수급 폭발 (1.5배 거래량)", # V5.5 수정
         "B. 단기/장기 정배열 골든크로스",
         "C. 매집 박스권 강한 돌파",
-        "D. 52주 신고가/BB 상단 돌파",
+        "D. 볼린저밴드 상단 돌파", 
         "E. 단기 추세 정배열 돌파",
         "F. 장대양봉 및 짧은 꼬리",
         "G. RSI 60 이하 반등", 
@@ -240,11 +237,11 @@ def main():
     # 사용자가 이전 선택을 유지하도록 default 값 제거
     selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies)
 
-    # --- 3️⃣ 스캔할 종목 목록 (V5.3: 코스닥 대형주 30개 기본 설정) ---
+    # --- 3️⃣ 스캔할 종목 목록 (V5.5: 코스피 하위 50개 종목) ---
     st.sidebar.header("3️⃣ 스캔할 종목 목록")
-    # 코스닥 시가총액 상위 종목 30개 (yfinance 안정성을 고려하여 선별)
-    default_tickers = "091990.KQ, 068790.KQ, 086960.KQ, 000250.KQ, 058470.KQ, 035900.KQ, 086520.KQ, 025980.KQ, 036830.KQ, 041930.KQ, 093520.KQ, 145780.KQ, 078340.KQ, 065510.KQ, 002390.KQ, 072560.KQ, 078130.KQ, 003620.KQ, 078650.KQ, 003550.KQ, 067630.KQ, 039200.KQ, 068050.KQ, 048410.KQ, 067000.KQ, 079940.KQ, 067780.KQ, 036930.KQ, 086450.KQ, 071850.KQ"
-    st.sidebar.markdown("이 리스트는 **코스닥 대형주 약 30개**로 자동 설정됩니다. **(수정 가능)**")
+    # 코스피 하위 50개 (소형주 위주) 종목 (투기성이 높을 수 있습니다.)
+    default_tickers = "000100.KS, 000180.KS, 000210.KS, 000220.KS, 000230.KS, 000300.KS, 000320.KS, 000370.KS, 000480.KS, 000500.KS, 000520.KS, 000540.KS, 000650.KS, 000670.KS, 000810.KS, 000860.KS, 000880.KS, 000950.KS, 000970.KS, 001040.KS, 001060.KS, 001070.KS, 001080.KS, 001120.KS, 001140.KS, 001210.KS, 001230.KS, 001250.KS, 001270.KS, 001380.KS, 001390.KS, 001430.KS, 001520.KS, 001550.KS, 001570.KS, 001630.KS, 001740.KS, 001780.KS, 001800.KS, 001820.KS, 001940.KS, 001950.KS, 002020.KS, 002030.KS, 002070.KS, 002170.KS, 002200.KS, 002210.KS, 002240.KS, 002270.KS"
+    st.sidebar.markdown("이 리스트는 **코스피 하위 50개 (소형주)** 종목으로 자동 설정됩니다. **(수정 가능)**")
     tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", default_tickers) 
     
     # --- 4️⃣ 텔레그램 알림 설정 ---
@@ -260,7 +257,7 @@ def main():
             st.warning("분석할 전략을 1개 이상 선택해주세요. 🧘")
             return
 
-        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 코스닥 대형주를 스캔합니다...")
+        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 코스피 소형주를 스캔합니다...")
         
         tickers = [t.strip() for t in tickers_input.split(',') if t.strip()]
         found_count = 0
