@@ -49,7 +49,11 @@ def calculate_indicators(df):
 
 def analyze_stock(ticker, selected_strategies):
     # 데이터 가져오기 (최근 1년 데이터)
-    df = yf.download(ticker, period="1y", progress=False)
+    try:
+        df = yf.download(ticker, period="1y", progress=False)
+    except Exception:
+        return []
+
     if df.empty or len(df) < 120:
         return []
 
@@ -61,75 +65,68 @@ def analyze_stock(ticker, selected_strategies):
     
     matched_reasons = []
 
-    # ================= V4.1 완화된 다중 전략 로직 =================
+    # ================= V4.1 완화된 다중 전략 로직 (유지) =================
     
-    # 전략 A: 강력 수급 폭발 (3배 거래량 -> 2.5배 완화)
+    # 전략 A: 강력 수급 폭발 (2.5배 거래량)
     if "A. 강력 수급 폭발 (2.5배 거래량)" in selected_strategies:
         if today['Volume'] > (today['VolMA20'] * 2.5) and today['Close'] > today['Open']:
             pct_change = ((today['Close'] - yesterday['Close']) / yesterday['Close']) * 100
             matched_reasons.append({"strategy": "A. 강력 수급 폭발", "reason": f"🔥 거래량이 평소 2.5배 이상 터지며 {pct_change:.2f}% 급등했습니다. (강력한 매수세 프록시)"})
 
-    # 전략 B: 단기/장기 정배열 골든크로스 (조건 유지)
+    # 전략 B: 단기/장기 정배열 골든크로스
     if "B. 단기/장기 정배열 골든크로스" in selected_strategies:
         if today['MA5'] > today['MA60'] and today['MA5'] > today['MA120'] and \
            yesterday['MA5'] <= yesterday['MA60'] or yesterday['MA5'] <= yesterday['MA120']:
             matched_reasons.append({"strategy": "B. 다중 정배열 골든크로스", "reason": "🚀 5일선이 60일, 120일선을 동시 돌파하며 강력한 장기 추세 전환 신호 발생."})
 
-    # 전략 C: 매집 박스권 강한 돌파 (거래량 1.5배로 완화)
+    # 전략 C: 매집 박스권 강한 돌파
     if "C. 매집 박스권 강한 돌파" in selected_strategies:
         box_high = df['High'].iloc[-60:-1].max()
-        # 오늘 종가가 박스권을 1% 이상 돌파 + 거래량(평소 1.5배 이상)
         if today['Close'] > box_high * 1.01 and today['Volume'] > (today['VolMA20'] * 1.5):
             matched_reasons.append({"strategy": "C. 매집 박스권 강한 돌파", "reason": "🎯 60일 박스권 상단을 1.5배 거래량으로 돌파하며 매집 물량 소화."})
 
-    # 전략 D: 52주 신고가/BB 상단 돌파 (조건 유지)
+    # 전략 D: 52주 신고가/BB 상단 돌파
     if "D. 52주 신고가/BB 상단 돌파" in selected_strategies:
         if today['Close'] > today['52Wk_High'] * 0.995: 
             matched_reasons.append({"strategy": "D. 52주 신고가 근접", "reason": "🌟 52주 신고가 근접/돌파하며 강세 추세가 이어지는 시점."})
         if today['Close'] > today['BB_Upper']:
             matched_reasons.append({"strategy": "D. 볼린저밴드 상단 돌파", "reason": "⚡ 볼린저밴드 상단을 돌파하며 추세 확장 신호 발생."})
 
-    # 전략 E: 단기 추세 정배열 돌파 (조건 유지)
+    # 전략 E: 단기 추세 정배열 돌파
     if "E. 단기 추세 정배열 돌파" in selected_strategies:
-        # 5, 20, 60일선 정배열 + 오늘 장대양봉(시가 대비 종가 3% 이상 상승)
         if today['MA5'] > today['MA20'] > today['MA60'] and (today['Close'] / today['Open'] - 1) > 0.03:
             matched_reasons.append({"strategy": "E. 단기 추세 정배열 돌파", "reason": "🚀 5-20-60일선 정배열 상태에서 기준봉이 발생하며 추가 상승 기대."})
 
-    # 전략 F: 장대양봉 및 짧은 꼬리 (몸통 70%, 3% 상승으로 완화)
+    # 전략 F: 장대양봉 및 짧은 꼬리
     if "F. 장대양봉 및 짧은 꼬리" in selected_strategies:
         candle_range = today['High'] - today['Low']
         body_range = abs(today['Close'] - today['Open'])
         
-        # 몸통 비율 70% 이상 + 오늘 종가 > 어제 종가 3% 이상 상승
         if candle_range > 0 and (body_range / candle_range) >= 0.7 and (today['Close'] / yesterday['Close'] - 1) > 0.03:
             matched_reasons.append({"strategy": "F. 장대양봉 및 짧은 꼬리", "reason": "🕯️ 몸통 비율이 70% 이상인 3% 이상 급등 양봉 포착."})
 
-    # 전략 G: RSI 40 이하 반등 (조건 유지)
+    # 전략 G: RSI 40 이하 반등
     if "G. RSI 40 이하 반등" in selected_strategies:
         if today['RSI'] <= 40 and today['Close'] > today['Open']:
              matched_reasons.append({"strategy": "G. RSI 40 이하 반등", "reason": f"🧘 RSI({today['RSI']:.1f})가 40 이하로 떨어져 과매도 영역 진입 후 반등."})
             
-
     return matched_reasons
 
 # ---------------------------------------------------------
-# 2. 차트 시각화 함수 (V4.1 - 변화 없음)
+# 2. 차트 시각화 함수 (V4.2 - 변화 없음)
 # ---------------------------------------------------------
 def plot_chart(ticker, df, strategy_type, analyst_rec):
-    # 필요한 지표가 계산되지 않은 경우 다시 계산
     if 'MA5' not in df.columns:
         df = calculate_indicators(df)
         
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [3, 1]})
     
-    # 상단 차트 (가격 및 이평선)
     ax1.plot(df.index, df['Close'], label='Close Price', color='black')
     ax1.plot(df.index, df['MA5'], label='MA5', color='cyan', alpha=0.7)
     ax1.plot(df.index, df['MA20'], label='MA20', color='green')
     ax1.plot(df.index, df['MA60'], label='MA60', color='orange')
     ax1.plot(df.index, df['MA120'], label='MA120', color='red', alpha=0.5)
 
-    # 볼린저 밴드 (전략 D)
     if "볼린저밴드 상단 돌파" in strategy_type:
         ax1.plot(df.index, df['BB_Upper'], 'g--', label='BB Upper', alpha=0.5)
         ax1.plot(df.index, df['BB_Lower'], 'r--', label='BB Lower', alpha=0.5)
@@ -139,13 +136,11 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
     ax1.grid(True, alpha=0.3)
     ax1.legend()
 
-    # 하단 차트 (RSI 및 거래량)
     ax2.plot(df.index, df['RSI'], label='RSI (14)', color='purple')
     ax2.axhline(40, color='orange', linestyle='--', label='RSI 40')
     ax2.axhline(30, color='red', linestyle='--', label='RSI 30')
     ax2.set_title("RSI Indicator")
     
-    # 거래량은 RSI 차트 위에 겹쳐서 투명하게 표시
     ax2_vol = ax2.twinx()
     ax2_vol.bar(df.index, df['Volume'], color='gray', alpha=0.3, label='Volume')
     ax2_vol.set_ylabel('Volume', color='gray')
@@ -174,15 +169,14 @@ def display_ticker_info(ticker, df, analyst_rec):
     st.markdown(f"### {ticker} 상세 정보")
     st.markdown(f"**🗣️ 애널리스트 의견:** **{analyst_rec.upper()}**")
     
-    # 차트 표시
     fig = plot_chart(ticker, df, "개별 조회", analyst_rec)
     st.pyplot(fig)
     st.markdown("---")
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V4.1", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V4.1 - 완화 조건)")
+    st.set_page_config(page_title="AI Trading Scanner V4.2", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V4.2 - 오류 처리 강화)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
@@ -205,7 +199,7 @@ def main():
 
     # --- 3️⃣ 스캔할 종목 목록 (시총 필터 제거) ---
     st.sidebar.header("3️⃣ 스캔할 종목 목록")
-    tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", "AAPL, TSLA, NVDA, 005930.KS, 035420.KR") # KRX 종목 추가
+    tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", "AAPL, TSLA, NVDA, 005930.KS, 035420.KS") 
     
     # --- 4️⃣ 텔레그램 알림 설정 (V2.0과 동일) ---
     st.sidebar.header("4️⃣ 텔레그램 알림 설정")
@@ -216,12 +210,15 @@ def main():
     # --- 메인 화면 로직 ---
     
     if st.sidebar.button("📊 개별 종목 분석"):
-        data = yf.download(single_ticker, period="1y", progress=False)
-        if not data.empty:
-            _, _, analyst_rec = get_stock_info(single_ticker)
-            display_ticker_info(single_ticker, data, analyst_rec)
-        else:
-            st.error(f"티커 '{single_ticker}'의 데이터를 찾을 수 없습니다. (한국 주식은 000000.KS 또는 .KQ 확인)")
+        try:
+            data = yf.download(single_ticker, period="1y", progress=False)
+            if not data.empty:
+                _, _, analyst_rec = get_stock_info(single_ticker)
+                display_ticker_info(single_ticker, data, analyst_rec)
+            else:
+                st.error(f"티커 '{single_ticker}'의 데이터를 찾을 수 없습니다. (한국 주식은 000000.KS 또는 .KQ 확인)")
+        except Exception:
+            st.error(f"티커 '{single_ticker}' 데이터 조회 중 오류가 발생했습니다. 티커를 다시 확인해 주세요.")
 
     st.markdown("---")
 
@@ -232,15 +229,15 @@ def main():
 
         st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 시장을 스캔합니다...")
         
-        tickers = [t.strip() for t in tickers_input.split(',') if t.strip()] # 빈 값 제거
+        tickers = [t.strip() for t in tickers_input.split(',') if t.strip()]
         found_count = 0
         progress_bar = st.progress(0)
         
         for i, ticker in enumerate(tickers):
             
-            # --- 시가총액 필터링 제거 (정보만 가져옴) ---
-            _, market_cap_usd, analyst_rec = get_stock_info(ticker)
-
+            # --- 정보 가져오기 ---
+            info, market_cap_usd, analyst_rec = get_stock_info(ticker)
+            
             # --- 다중 전략 분석 실행 ---
             matched_reasons = analyze_stock(ticker, selected_strategies)
             
