@@ -10,7 +10,7 @@ def send_telegram_msg(bot_token, chat_id, message):
     if not bot_token or not chat_id:
         return
     try:
-        url = f"https://api.telegram.com/bot{bot_token}/sendMessage"
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         params = {'chat_id': chat_id, 'text': message}
         requests.get(url, params=params)
     except Exception as e:
@@ -94,9 +94,9 @@ def analyze_stock(ticker, selected_strategies):
          
     matched_reasons = []
 
-    # ================= V5.2 수정된 다중 전략 로직 =================
+    # ================= V5.2 수정된 다중 전략 로직 유지 =================
     
-    # 전략 A: 강력 수급 폭발 (2배 거래량) - V5.1 수정됨 (2.5배 -> 2배)
+    # 전략 A: 강력 수급 폭발 (2배 거래량)
     if "A. 강력 수급 폭발 (2배 거래량)" in selected_strategies:
         if today['Volume'] > (today['VolMA20'] * 2.0) and today['Close'] > today['Open']:
             pct_change = ((today['Close'] - yesterday['Close']) / yesterday['Close']) * 100
@@ -136,7 +136,7 @@ def analyze_stock(ticker, selected_strategies):
         if candle_range > 0 and (body_range / candle_range) >= 0.7 and (today['Close'] / yesterday['Close'] - 1) > 0.03:
             matched_reasons.append({"strategy": "F. 장대양봉 및 짧은 꼬리", "reason": "🕯️ 몸통 비율이 70% 이상인 3% 이상 급등 양봉 포착."})
 
-    # 전략 G: RSI 60 이하 반등 - V5.2 수정됨 (40 이하 -> 60 이하)
+    # 전략 G: RSI 60 이하 반등
     if "G. RSI 60 이하 반등" in selected_strategies:
         # RSI 값이 NaN이 아닐 때만 체크
         if not pd.isna(today['RSI']) and today['RSI'] <= 60 and today['Close'] > today['Open']:
@@ -171,7 +171,7 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
 
     if 'RSI' in df.columns:
         ax2.plot(df.index, df['RSI'], label='RSI (14)', color='purple')
-        ax2.axhline(60, color='blue', linestyle='--', label='RSI 60 (New)') # V5.2 반영
+        ax2.axhline(60, color='blue', linestyle='--', label='RSI 60 (New)') 
         ax2.axhline(40, color='orange', linestyle='--', label='RSI 40') 
         ax2.axhline(30, color='red', linestyle='--', label='RSI 30')
         ax2.set_title("RSI Indicator")
@@ -217,8 +217,8 @@ def display_ticker_info(ticker, df, analyst_rec):
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V5.2", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V5.2 - A, G 전략 완화 최종)")
+    st.set_page_config(page_title="AI Trading Scanner V5.3", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V5.3 - 코스닥 대형주 기본 설정)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
@@ -240,11 +240,11 @@ def main():
     # 사용자가 이전 선택을 유지하도록 default 값 제거
     selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies)
 
-    # --- 3️⃣ 스캔할 종목 목록 (V5.0: 안정적인 대형주 자동 로딩) ---
+    # --- 3️⃣ 스캔할 종목 목록 (V5.3: 코스닥 대형주 30개 기본 설정) ---
     st.sidebar.header("3️⃣ 스캔할 종목 목록")
-    # 시가총액 상위 종목 중 오류가 적은 안정적인 티커 20개 (V5.0 기본 리스트 유지)
-    default_tickers = "005930.KS, 000660.KS, 207940.KS, 068270.KS, 005490.KS, 035420.KS, 035720.KS, 005380.KS, 000270.KS, 051910.KS, 032830.KS, 015760.KS, 086790.KS, 028260.KS, 006400.KS, 009150.KS, 034730.KS, 096770.KS, 105560.KS, 003490.KS"
-    st.sidebar.markdown("이 리스트는 **코스피 대형주 20개**로 자동 설정됩니다. (직접 수정 가능)")
+    # 코스닥 시가총액 상위 종목 30개 (yfinance 안정성을 고려하여 선별)
+    default_tickers = "091990.KQ, 068790.KQ, 086960.KQ, 000250.KQ, 058470.KQ, 035900.KQ, 086520.KQ, 025980.KQ, 036830.KQ, 041930.KQ, 093520.KQ, 145780.KQ, 078340.KQ, 065510.KQ, 002390.KQ, 072560.KQ, 078130.KQ, 003620.KQ, 078650.KQ, 003550.KQ, 067630.KQ, 039200.KQ, 068050.KQ, 048410.KQ, 067000.KQ, 079940.KQ, 067780.KQ, 036930.KQ, 086450.KQ, 071850.KQ"
+    st.sidebar.markdown("이 리스트는 **코스닥 대형주 약 30개**로 자동 설정됩니다. **(수정 가능)**")
     tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", default_tickers) 
     
     # --- 4️⃣ 텔레그램 알림 설정 ---
@@ -260,7 +260,7 @@ def main():
             st.warning("분석할 전략을 1개 이상 선택해주세요. 🧘")
             return
 
-        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 시가총액 상위 20 종목을 스캔합니다...")
+        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 코스닥 대형주를 스캔합니다...")
         
         tickers = [t.strip() for t in tickers_input.split(',') if t.strip()]
         found_count = 0
