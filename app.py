@@ -38,7 +38,7 @@ def calculate_indicators(df):
         # 이평선
         df_copy['MA5'] = safe_rolling_mean(df_copy['Close'], 5)
         df_copy['MA20'] = safe_rolling_mean(df_copy['Close'], 20)
-        df_copy['MA60'] = safe_rolling_mean(df_copy['Close'], 60) # MA50 요청을 MA60으로 대체
+        df_copy['MA60'] = safe_rolling_mean(df_copy['Close'], 60) 
         df_copy['MA120'] = safe_rolling_mean(df_copy['Close'], 120)
         
         # RSI (14일)
@@ -48,17 +48,18 @@ def calculate_indicators(df):
         rs = gain / loss
         df_copy['RSI'] = 100 - (100 / (1 + rs))
         
-        # MFI (Money Flow Index, 14일) - V5.7 추가
+        # MFI (Money Flow Index, 14일)
         typical_price = (df_copy['High'] + df_copy['Low'] + df_copy['Close']) / 3
         money_flow = typical_price * df_copy['Volume']
         
         positive_mf = money_flow.where(typical_price.diff() > 0, 0).rolling(window=14).sum()
         negative_mf = money_flow.where(typical_price.diff() < 0, 0).rolling(window=14).sum().abs()
         
-        money_ratio = positive_mf / negative_mf
+        # Division by zero prevention for Money Ratio
+        money_ratio = positive_mf / negative_mf.replace(0, np.nan) 
         df_copy['MFI'] = 100 - (100 / (1 + money_ratio))
         
-        # MACD (12, 26, 9) - V5.7 추가
+        # MACD (12, 26, 9)
         exp1 = df_copy['Close'].ewm(span=12, adjust=False).mean()
         exp2 = df_copy['Close'].ewm(span=26, adjust=False).mean()
         df_copy['MACD'] = exp1 - exp2
@@ -114,25 +115,25 @@ def analyze_stock(ticker, selected_strategies):
             pct_change = ((today['Close'] - yesterday['Close']) / yesterday['Close']) * 100
             matched_reasons.append({"strategy": "A. 강력 수급 폭발", "reason": f"🔥 거래량이 평소 1.5배 이상 터지며 {pct_change:.2f}% 급등했습니다. (강한 매수 유입)"})
 
-    # 전략 B: 단기/중기 이동평균선 골든크로스 (MA20 > MA60) - 요청 반영
+    # 전략 B: 단기/중기 이동평균선 골든크로스 (MA20 > MA60)
     if "B. 단기/중기 이동평균선 골든크로스 (MA20 > MA60)" in selected_strategies:
         if today['MA20'] > today['MA60'] and yesterday['MA20'] <= yesterday['MA60']:
             matched_reasons.append({"strategy": "B. 이동평균선 골든크로스", "reason": "🚀 20일선이 60일선을 상향 돌파하는 **단기/중기 추세 전환 신호** 발생."})
 
-    # 전략 C: RSI 과매도 반등 (30 이하) - 요청 반영
+    # 전략 C: RSI 과매도 반등 (30 이하)
     if "C. RSI 과매도 반등 (30 이하)" in selected_strategies:
         # RSI가 NaN이 아니고, RSI가 30 이하에서 벗어나며 주가가 양봉으로 마감
         if not pd.isna(today['RSI']) and yesterday['RSI'] <= 30 and today['RSI'] > yesterday['RSI'] and today['Close'] > today['Open']:
             matched_reasons.append({"strategy": "C. RSI 과매도 반등", "reason": f"📈 RSI({today['RSI']:.1f})가 30 이하 과매도 구간에서 벗어나며 **단기 강력 반등 시그널** 포착."})
 
-    # 전략 D: MACD 시그널선 상향 돌파 - 요청 반영
+    # 전략 D: MACD 시그널선 상향 돌파
     if "D. MACD 시그널선 상향 돌파" in selected_strategies:
         # MACD 선이 시그널 선 위로 올라가는 골든크로스
         if not pd.isna(today['MACD']) and not pd.isna(today['MACD_Signal']) and \
            today['MACD'] > today['MACD_Signal'] and yesterday['MACD'] <= yesterday['MACD_Signal']:
             matched_reasons.append({"strategy": "D. MACD 골든크로스", "reason": "🌟 MACD선이 시그널선을 상향 돌파하며 **강력한 모멘텀 상승 신호** 발생."})
 
-    # 전략 E: MFI 과매도 반등 (20 이하) - 요청 반영
+    # 전략 E: MFI 과매도 반등 (20 이하)
     if "E. MFI 과매도 반등 (20 이하)" in selected_strategies:
         # MFI가 NaN이 아니고, MFI가 20 이하에서 벗어나며 주가가 양봉으로 마감
         if not pd.isna(today['MFI']) and yesterday['MFI'] <= 20 and today['MFI'] > yesterday['MFI'] and today['Close'] > today['Open']:
@@ -162,13 +163,8 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
     if df.empty or 'MA5' not in df.columns:
         return None
         
-    # 차트에 사용할 MACD, MACD_Signal이 없는 경우 MACD 차트 제외 (V5.7 반영)
     has_macd = 'MACD' in df.columns and not df['MACD'].isnull().all()
     
-    # 서브플롯 개수 결정
-    rows = 2 if has_macd else 1
-    
-    # RSI, 볼륨 + MACD를 포함하거나 RSI, 볼륨만 포함
     if has_macd:
         fig, axes = plt.subplots(3, 1, figsize=(10, 10), gridspec_kw={'height_ratios': [4, 1, 1]})
         ax1, ax2, ax3 = axes
@@ -194,8 +190,8 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
 
     # 2. RSI/MFI 및 거래량 차트 (ax2)
     if 'RSI' in df.columns:
-        # RSI 또는 MFI를 표시 (MFI가 있으면 MFI를 표시하여 전략 E를 보조)
-        if 'MFI' in df.columns and 'E' in strategy_type:
+        # 매칭된 전략에 MFI (전략 E)가 포함되어 있으면 MFI를 표시
+        if 'E.' in strategy_type:
              ax2.plot(df.index, df['MFI'], label='MFI (14)', color='brown')
              ax2.axhline(80, color='red', linestyle='--', label='MFI 80 (Overbought)')
              ax2.axhline(50, color='blue', linestyle=':', label='MFI 50')
@@ -207,6 +203,7 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
              ax2.axhline(50, color='blue', linestyle=':', label='RSI 50')
              ax2.axhline(30, color='green', linestyle='--', label='RSI 30 (Oversold)')
              ax2.set_title("RSI Indicator")
+
     else:
         ax2.set_title("Momentum Indicator (Data Error)")
 
@@ -259,8 +256,8 @@ def display_ticker_info(ticker, df, analyst_rec):
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V5.7", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V5.7 - 최종 전략 및 텔레그램 고정)")
+    st.set_page_config(page_title="AI Trading Scanner V5.7.1", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V5.7.1 - 코스피 소형주 + 코스닥 대형주 100선)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
@@ -272,24 +269,31 @@ def main():
     st.sidebar.header("2️⃣ 타점 전략 선택 (다중 선택 가능)")
     all_strategies = [
         "A. 강력 수급 폭발 (거래량 1.5배)", 
-        "B. 단기/중기 이동평균선 골든크로스 (MA20 > MA60)", # V5.7 변경
-        "C. RSI 과매도 반등 (30 이하)", # V5.7 변경
-        "D. MACD 시그널선 상향 돌파", # V5.7 변경
-        "E. MFI 과매도 반등 (20 이하)", # V5.7 추가
+        "B. 단기/중기 이동평균선 골든크로스 (MA20 > MA60)", 
+        "C. RSI 과매도 반등 (30 이하)", 
+        "D. MACD 시그널선 상향 돌파", 
+        "E. MFI 과매도 반등 (20 이하)", 
         "F. 볼린저밴드 상단 돌파", 
-        "G. 장대양봉 및 짧은 꼬리", # V5.7 변경
+        "G. 장대양봉 및 짧은 꼬리", 
     ]
     # 사용자가 이전 선택을 유지하도록 default 값 제거
     selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies)
 
-    # --- 3️⃣ 스캔할 종목 목록 (코스피 하위 50개 종목 유지) ---
-    st.sidebar.header("3️⃣ 스캔할 종목 목록")
-    # 코스피 하위 50개 (소형주 위주) 종목 (투기성이 높을 수 있습니다.)
-    default_tickers = "000100.KS, 000180.KS, 000210.KS, 000220.KS, 000230.KS, 000300.KS, 000320.KS, 000370.KS, 000480.KS, 000500.KS, 000520.KS, 000540.KS, 000650.KS, 000670.KS, 000810.KS, 000860.KS, 000880.KS, 000950.KS, 000970.KS, 001040.KS, 001060.KS, 001070.KS, 001080.KS, 001120.KS, 001140.KS, 001210.KS, 001230.KS, 001250.KS, 001270.KS, 001380.KS, 001390.KS, 001430.KS, 001520.KS, 001550.KS, 001570.KS, 001630.KS, 001740.KS, 001780.KS, 001800.KS, 001820.KS, 001940.KS, 001950.KS, 002020.KS, 002030.KS, 002070.KS, 002170.KS, 002200.KS, 002210.KS, 002240.KS, 002270.KS"
-    st.sidebar.markdown("이 리스트는 **코스피 하위 50개 (소형주)** 종목으로 자동 설정됩니다. **(수정 가능)**")
+    # --- 3️⃣ 스캔할 종목 목록 (V5.7.1: 코스피 하위 50 + 코스닥 상위 50) ---
+    st.sidebar.header("3️⃣ 스캔할 종목 목록 (총 100개)")
+    
+    # 코스닥 상위 50개 종목 리스트 (대형주 위주)
+    kosdaq_top50 = "000210.KQ, 000660.KQ, 000880.KQ, 001120.KQ, 001390.KQ, 001550.KQ, 002170.KQ, 002200.KQ, 002270.KQ, 002320.KQ, 002360.KQ, 002390.KQ, 003380.KQ, 003550.KQ, 003560.KQ, 003620.KQ, 003650.KQ, 004140.KQ, 004720.KQ, 004830.KQ, 005180.KQ, 005880.KQ, 005930.KQ, 006400.KQ, 007680.KQ, 008770.KQ, 009190.KQ, 010060.KQ, 010120.KQ, 010140.KQ, 011070.KQ, 012280.KQ, 012450.KQ, 012750.KQ, 013420.KQ, 013640.KQ, 013700.KQ, 014990.KQ, 015350.KQ, 015760.KQ, 016600.KQ, 018000.KQ, 018260.KQ, 019550.KQ, 020660.KQ, 023590.KQ, 024740.KQ, 025680.KQ, 028080.KQ, 028300.KQ"
+    
+    # 코스피 하위 50개 종목 리스트 (소형주 위주)
+    kospi_low50 = "000100.KS, 000180.KS, 000210.KS, 000220.KS, 000230.KS, 000300.KS, 000320.KS, 000370.KS, 000480.KS, 000500.KS, 000520.KS, 000540.KS, 000650.KS, 000670.KS, 000810.KS, 000860.KS, 000880.KS, 000950.KS, 000970.KS, 001040.KS, 001060.KS, 001070.KS, 001080.KS, 001120.KS, 001140.KS, 001210.KS, 001230.KS, 001250.KS, 001270.KS, 001380.KS, 001390.KS, 001430.KS, 001520.KS, 001550.KS, 001570.KS, 001630.KS, 001740.KS, 001780.KS, 001800.KS, 001820.KS, 001940.KS, 001950.KS, 002020.KS, 002030.KS, 002070.KS, 002170.KS, 002200.KS, 002210.KS, 002240.KS, 002270.KS"
+
+    # 두 리스트를 합쳐서 기본값 설정
+    default_tickers = kospi_low50 + ", " + kosdaq_top50
+    st.sidebar.markdown("현재 **코스피 소형주 50개 + 코스닥 대형주 50개 (총 100개)**가 자동 설정되었습니다. **(수정 가능)**")
     tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", default_tickers) 
     
-    # --- 4️⃣ 텔레그램 알림 설정 (V5.6: 고정 및 자동 활성화 유지) ---
+    # --- 4️⃣ 텔레그램 알림 설정 (고정 및 자동 활성화 유지) ---
     st.sidebar.header("4️⃣ 텔레그램 알림 설정 (자동)")
     tg_token = "7983927652:AAH8RRQpyJaika94NVmbmowvDIu5wHgfyWo"
     tg_chat_id = "1786596437"
@@ -304,7 +308,7 @@ def main():
             st.warning("분석할 전략을 1개 이상 선택해주세요. 🧘")
             return
 
-        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 코스피 소형주를 스캔합니다...")
+        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 총 {len(tickers_input.split(','))}개 종목을 스캔합니다...")
         
         tickers = [t.strip() for t in tickers_input.split(',') if t.strip()]
         found_count = 0
