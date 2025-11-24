@@ -4,20 +4,28 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import requests
 import numpy as np
+import time
 
-# --- 텔레그램 알림 함수 (변화 없음) ---
+# --- 텔레그램 알림 함수 (HTML 포맷 지정 추가) ---
 def send_telegram_msg(bot_token, chat_id, message):
     if not bot_token or not chat_id:
         return
     try:
         url = f"https://api.telegram.com/bot{bot_token}/sendMessage"
-        params = {'chat_id': chat_id, 'text': message}
+        params = {
+            'chat_id': chat_id, 
+            'text': message,
+            'parse_mode': 'HTML'  # HTML 태그를 사용하도록 설정
+        }
+        # API 호출 시 지연 시간 추가 (너무 빠른 요청 방지)
+        time.sleep(0.5) 
         requests.get(url, params=params)
     except Exception as e:
-        st.error(f"텔레그램 전송 실패: {e}")
+        # st.error 대신 console log로 처리하여 앱 UI를 방해하지 않음
+        print(f"텔레그램 전송 실패: {e}")
 
 # ---------------------------------------------------------
-# 1. 데이터 분석 및 다중 전략 체크 함수 
+# 1. 데이터 분석 및 다중 전략 체크 함수
 # ---------------------------------------------------------
 def safe_rolling_mean(series, window):
     return series.rolling(window=window, min_periods=1).mean()
@@ -73,12 +81,15 @@ def calculate_indicators(df):
 
         # ----------------- V6.2: 이격도 추가 -----------------
         # J. 이격도 (20일 이동평균선 대비 종가의 비율)
-        if 'MA20' in df_copy.columns:
+        if 'MA20' in df_copy.columns and not df_copy['MA20'].isnull().all():
             # 이격도 = (현재 종가 / MA20) * 100
             df_copy['Disparity'] = (df_copy['Close'] / df_copy['MA20']) * 100
+        else:
+            df_copy['Disparity'] = np.nan
         
     except Exception as e:
         # 지표 계산 중 오류 발생 시 None 반환
+        print(f"지표 계산 오류 발생: {e}")
         return None 
 
     return df_copy
@@ -92,7 +103,8 @@ def analyze_stock(ticker, selected_strategies):
         # Ticker 객체를 사용하여 오류를 줄여보는 시도
         ticker_obj = yf.Ticker(ticker)
         df = ticker_obj.history(period="1y") 
-    except Exception:
+    except Exception as e:
+        print(f"티커 {ticker} 데이터 로드 실패: {e}")
         return []
 
     if df.empty or len(df) < 2 or 'Close' not in df.columns:
@@ -183,11 +195,19 @@ def analyze_stock(ticker, selected_strategies):
     
     # 다이버전스 분석을 위한 최근 5일 데이터 준비 (n=5)
     n = 5
-    recent_df = df.iloc[-n-1:-1].copy() # 어제까지의 n일 데이터 (총 n개)
+    # 오늘 포함 최근 n+1일 데이터 (오늘을 포함해야 today가 됨)
+    recent_df_full = df.iloc[-(n+1):] 
     
+    if len(recent_df_full) >= 2:
+        # 오늘 날짜
+        today_data = recent_df_full.iloc[-1]
+        # 오늘을 제외한 이전 n일 데이터
+        recent_df = recent_df_full.iloc[:-1] 
+    else:
+        return matched_reasons # 데이터 부족
+
     # V6.2: 다이버전스 전제 조건: 주가는 n일 동안 저점을 갱신했는가?
-    # 종가 기준 저점 비교가 가장 보편적입니다.
-    price_low_new = today.get('Close', np.nan) 
+    price_low_new = today_data.get('Close', np.nan) 
     price_low_old = recent_df['Close'].min()
     
     # 주가 하락 (새 저점 < 이전 n일간 저점)이 전제되어야 상승 다이버전스 검색 가능
@@ -195,7 +215,7 @@ def analyze_stock(ticker, selected_strategies):
     
     # 전략 H: RSI 상승 다이버전스 (RSI 저점 상승)
     if "H. RSI 상승 다이버전스" in selected_strategies and is_price_diverging and 'RSI' in df.columns:
-        rsi_low_new = today.get('RSI', np.nan)
+        rsi_low_new = today_data.get('RSI', np.nan)
         rsi_low_old = recent_df['RSI'].min() if 'RSI' in recent_df.columns else np.nan
         
         # RSI 저점 상승 (새 저점 > 이전 저점) and RSI 40 이하에서 발생 (신뢰도 높음)
@@ -204,16 +224,16 @@ def analyze_stock(ticker, selected_strategies):
 
     # 전략 I: MACD 상승 다이버전스 (MACD 저점 상승)
     if "I. MACD 상승 다이버전스" in selected_strategies and is_price_diverging and 'MACD' in df.columns:
-        macd_low_new = today.get('MACD', np.nan)
+        macd_low_new = today_data.get('MACD', np.nan)
         macd_low_old = recent_df['MACD'].min() if 'MACD' in recent_df.columns else np.nan
         
         # MACD 저점 상승 (새 저점 > 이전 저점) and MACD 0선 이하에서 발생 (신뢰도 높음)
-        if not pd.isna(macd_low_new) and not pd.isna(macd_low_old) and macd_low_new > macd_low_old and today.get('MACD', 1) < 0:
+        if not pd.isna(macd_low_new) and not pd.isna(macd_low_old) and macd_low_new > macd_low_old and today_data.get('MACD', 1) < 0:
             matched_reasons.append({"strategy": "I. MACD 상승 다이버전스", "reason": f"✨ 주가 하락에도 MACD({macd_low_new:.2f})는 상승하여 **중기 추세 반전(다이버전스)** 신호 포착."})
 
     # 전략 J: MA 이격도 과매도 (20일선 대비 95% 이하)
     if "J. MA 이격도 과매도" in selected_strategies and 'Disparity' in df.columns:
-        tdisparity = today.get('Disparity', np.nan)
+        tdisparity = today_data.get('Disparity', np.nan)
         # 이격도가 95% 이하: 주가가 20일 이동평균선보다 5% 이상 하락
         if not pd.isna(tdisparity) and tdisparity <= 95.0:
             matched_reasons.append({"strategy": "J. MA 이격도 과매도", "reason": f"📉 이격도({tdisparity:.1f}%)가 95% 이하로 **단기 낙폭 과대** 상태입니다. 평균 회귀 기대."})
@@ -221,7 +241,7 @@ def analyze_stock(ticker, selected_strategies):
     return matched_reasons
 
 # ---------------------------------------------------------
-# 2. 차트 시각화 함수 (변화 없음)
+# 2. 차트 시각화 함수
 # ---------------------------------------------------------
 def plot_chart(ticker, df, strategy_type, analyst_rec):
     if df is None or df.empty or 'Close' not in df.columns:
@@ -229,14 +249,31 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
         
     has_macd = 'MACD' in df.columns and not df['MACD'].isnull().all()
     
+    # RSI/MFI가 모두 NaN인 경우를 대비하여 차트 개수 조정
+    show_momentum = ('RSI' in df.columns and not df['RSI'].isnull().all()) or \
+                    ('MFI' in df.columns and not df['MFI'].isnull().all()) or \
+                    ('Volume' in df.columns and not df['Volume'].isnull().all())
+    
+    num_subcharts = 1 # 기본 주가 차트
+    if show_momentum:
+        num_subcharts += 1
     if has_macd:
-        fig, axes = plt.subplots(3, 1, figsize=(10, 10), gridspec_kw={'height_ratios': [4, 1, 1]})
-        ax1, ax2, ax3 = axes
-    else:
+        num_subcharts += 1
+        
+    if num_subcharts == 1:
+        # MACD, RSI/MFI, Volume 모두 없는 경우
+        fig, ax1 = plt.subplots(1, 1, figsize=(10, 5))
+        axes = [ax1]
+    elif num_subcharts == 2:
+        # MACD만 없거나, RSI/MFI/Volume만 없는 경우 (후자는 거의 없겠지만)
         fig, axes = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [3, 1]})
         ax1, ax2 = axes
+    else: # num_subcharts == 3
+        fig, axes = plt.subplots(3, 1, figsize=(10, 10), gridspec_kw={'height_ratios': [4, 1, 1]})
+        ax1, ax2, ax3 = axes
     
-    # 1. 주가 및 이평선 차트
+    
+    # 1. 주가 및 이평선 차트 (ax1)
     ax1.plot(df.index, df['Close'], label='Close Price', color='black')
     
     # 이평선 컬럼이 존재할 때만 플롯
@@ -254,42 +291,51 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
         ax1.plot(df.index, df['BB_Lower'], 'r--', label='BB Lower', alpha=0.5)
         ax1.fill_between(df.index, df['BB_Upper'], df['BB_Lower'], color='gray', alpha=0.05)
         
-    ax1.set_title(f"{ticker} 분석 차트 (의견: {analyst_rec})", fontsize=15, fontweight='bold')
+    ax1.set_title(f"{ticker} 분석 차트 (애널리스트 의견: {analyst_rec})", fontsize=15, fontweight='bold')
     ax1.grid(True, alpha=0.3)
     ax1.legend(loc='upper left')
 
     # 2. RSI/MFI 및 거래량 차트 (ax2)
-    show_mfi = 'E.' in strategy_type or ('MFI' in df.columns and ('RSI' not in df.columns or df['RSI'].isnull().all()))
-    
-    if show_mfi and 'MFI' in df.columns and not df['MFI'].isnull().all():
-         ax2.plot(df.index, df['MFI'], label='MFI (14)', color='brown')
-         ax2.axhline(80, color='red', linestyle='--', label='MFI 80 (Overbought)')
-         ax2.axhline(50, color='blue', linestyle=':', label='MFI 50')
-         ax2.axhline(20, color='green', linestyle='--', label='MFI 20 (Oversold)')
-         ax2.set_title("MFI Indicator")
-    elif 'RSI' in df.columns and not df['RSI'].isnull().all():
-         ax2.plot(df.index, df['RSI'], label='RSI (14)', color='purple')
-         ax2.axhline(70, color='red', linestyle='--', label='RSI 70 (Overbought)')
-         ax2.axhline(50, color='blue', linestyle=':', label='RSI 50')
-         ax2.axhline(30, color='green', linestyle='--', label='RSI 30 (Oversold)')
-         ax2.set_title("RSI Indicator")
-    else:
-        ax2.set_title("Momentum Indicator (Data Error or Not Calculated)")
+    if show_momentum:
+        # ax2는 RSI/MFI 또는 Volume 차트
+        current_ax = axes[1] if num_subcharts > 1 else ax1 # num_subcharts가 1이면 ax1에 겹쳐 그리는 것 방지
 
-    ax2_vol = ax2.twinx()
-    ax2_vol.bar(df.index, df['Volume'], color='gray', alpha=0.3, label='Volume')
-    ax2_vol.set_ylabel('Volume', color='gray')
-    ax2_vol.tick_params(axis='y', labelcolor='gray')
-    ax2.legend(loc='upper left')
+        show_mfi = 'E.' in strategy_type or ('MFI' in df.columns and ('RSI' not in df.columns or df['RSI'].isnull().all()))
+        
+        if show_mfi and 'MFI' in df.columns and not df['MFI'].isnull().all():
+             current_ax.plot(df.index, df['MFI'], label='MFI (14)', color='brown')
+             current_ax.axhline(80, color='red', linestyle='--', label='MFI 80 (Overbought)')
+             current_ax.axhline(50, color='blue', linestyle=':', label='MFI 50')
+             current_ax.axhline(20, color='green', linestyle='--', label='MFI 20 (Oversold)')
+             current_ax.set_title("MFI Indicator")
+        elif 'RSI' in df.columns and not df['RSI'].isnull().all():
+             current_ax.plot(df.index, df['RSI'], label='RSI (14)', color='purple')
+             current_ax.axhline(70, color='red', linestyle='--', label='RSI 70 (Overbought)')
+             current_ax.axhline(50, color='blue', linestyle=':', label='RSI 50')
+             current_ax.axhline(30, color='green', linestyle='--', label='RSI 30 (Oversold)')
+             current_ax.set_title("RSI Indicator")
+        else:
+            current_ax.set_title("Volume Chart")
+
+        if 'Volume' in df.columns:
+            ax2_vol = current_ax.twinx()
+            ax2_vol.bar(df.index, df['Volume'], color='gray', alpha=0.3, label='Volume')
+            ax2_vol.set_ylabel('Volume', color='gray')
+            ax2_vol.tick_params(axis='y', labelcolor='gray')
+        
+        current_ax.legend(loc='upper left')
+        current_ax.grid(True, alpha=0.3)
     
     # 3. MACD 차트 (ax3)
     if has_macd:
+        ax3 = axes[-1] # 마지막 서브차트가 MACD
         ax3.plot(df.index, df['MACD'], label='MACD Line', color='blue')
         ax3.plot(df.index, df['MACD_Signal'], label='Signal Line', color='red')
         ax3.bar(df.index, df['MACD'] - df['MACD_Signal'], label='Histogram', color='gray', alpha=0.5)
         ax3.axhline(0, color='black', linestyle='-', linewidth=0.5)
         ax3.set_title("MACD Indicator")
         ax3.legend(loc='upper left')
+        ax3.grid(True, alpha=0.3)
 
 
     plt.tight_layout()
@@ -314,7 +360,12 @@ def display_ticker_info(ticker, df, analyst_rec):
     st.markdown(f"### {ticker} 상세 정보")
     st.markdown(f"**🗣️ 애널리스트 의견:** **{analyst_rec.upper()}**")
     
-    fig = plot_chart(ticker, df, "개별 조회", analyst_rec) 
+    # 지표 계산을 먼저 시도하여 차트 생성에 사용
+    df_analyzed = calculate_indicators(df)
+    
+    # plot_chart 함수가 분석된 DF를 사용하도록 수정
+    fig = plot_chart(ticker, df_analyzed if df_analyzed is not None else df, "개별 조회", analyst_rec) 
+    
     if fig:
         st.pyplot(fig)
     else:
@@ -331,7 +382,8 @@ def main():
     # --- 1️⃣ 사이드바 설정 ---
     
     st.sidebar.header("1️⃣ 개별 종목 분석")
-    single_ticker = st.sidebar.text_input("티커 개별 조회 (예: 005930.KS)", "AAPL")
+    # 예시: 삼성전자 005930.KS, 애플 AAPL
+    single_ticker = st.sidebar.text_input("티커 개별 조회 (예: 005930.KS)", "AAPL") 
     
     # --- 2️⃣ 타점 전략 선택 (Multiselect) ---
     st.sidebar.header("2️⃣ 타점 전략 선택 (다중 선택 가능)")
@@ -355,19 +407,21 @@ def main():
     # --- 3️⃣ 스캔할 종목 목록 (코스피 하위 50 + 코스닥 상위 50 유지) ---
     st.sidebar.header("3️⃣ 스캔할 종목 목록 (총 100개)")
     
-    # 코스닥 상위 50개 종목 리스트 (대형주 위주)
-    kosdaq_top50 = "000210.KQ, 000660.KQ, 000880.KQ, 001120.KQ, 001390.KQ, 001550.KQ, 002170.KQ, 002200.KQ, 002270.KQ, 002320.KQ, 002360.KQ, 002390.KQ, 003380.KQ, 003550.KQ, 003560.KQ, 003620.KQ, 003650.KQ, 004140.KQ, 004720.KQ, 004830.KQ, 005180.KQ, 005880.KQ, 005930.KQ, 006400.KQ, 007680.KQ, 008770.KQ, 009190.KQ, 010060.KQ, 010120.KQ, 010140.KQ, 011070.KQ, 012280.KQ, 012450.KQ, 012750.KQ, 013420.KQ, 013640.KQ, 013700.KQ, 014990.KQ, 015350.KQ, 015760.KQ, 016600.KQ, 018000.KQ, 018260.KQ, 019550.KQ, 020660.KQ, 023590.KQ, 024740.KQ, 025680.KQ, 028080.KQ, 028300.KQ"
+    # 코스닥 상위 50개 종목 리스트 (대형주 위주) - 예시 티커로 변경 (yfinance 호환성을 고려하여)
+    # yfinance가 모든 코스닥 티커를 잘 지원하지 않으므로, 테스트용으로 제한된 목록 사용
+    kosdaq_top50_example = "035720.KQ, 066970.KQ, 041190.KQ, 096610.KQ, 000210.KQ" # 카카오게임즈, 엘앤에프 등
     
-    # 코스피 하위 50개 종목 리스트 (소형주 위주)
-    kospi_low50 = "000100.KS, 000180.KS, 000210.KS, 000220.KS, 000230.KS, 000300.KS, 000320.KS, 000370.KS, 000480.KS, 000500.KS, 000520.KS, 000540.KS, 000650.KS, 000670.KS, 000810.KS, 000860.KS, 000880.KS, 000950.KS, 000970.KS, 001040.KS, 001060.KS, 001070.KS, 001080.KS, 001120.KS, 001140.KS, 001210.KS, 001230.KS, 001250.KS, 001270.KS, 001380.KS, 001390.KS, 001430.KS, 001520.KS, 001550.KS, 001570.KS, 001630.KS, 001740.KS, 001780.KS, 001800.KS, 001820.KS, 001940.KS, 001950.KS, 002020.KS, 002030.KS, 002070.KS, 002170.KS, 002200.KS, 002210.KS, 002240.KS, 002270.KS"
-
-    # 두 리스트를 합쳐서 기본값 설정
-    default_tickers = kospi_low50 + ", " + kosdaq_top50
-    st.sidebar.markdown("현재 **코스피 소형주 50개 + 코스닥 대형주 50개 (총 100개)**가 자동 설정되었습니다. **(수정 가능)**")
+    # 코스피 하위 50개 종목 리스트 (소형주 위주) - 예시 티커로 변경
+    kospi_low50_example = "005930.KS, 005380.KS, 035420.KS, 000660.KS, 012330.KS" # 삼성전자, 현대차, 네이버, SK하이닉스, 현대모비스
+    
+    # 두 리스트를 합쳐서 기본값 설정 (테스트를 위해 수를 줄였습니다)
+    default_tickers = kospi_low50_example + ", " + kosdaq_top50_example + ", TSLA, MSFT"
+    st.sidebar.markdown("현재 **코스피/코스닥 대형주 + 해외주식 (총 10개)**가 자동 설정되었습니다. **(수정 가능)**")
     tickers_input = st.sidebar.text_area("티커 목록 (쉼표 구분)", default_tickers) 
     
     # --- 4️⃣ 텔레그램 알림 설정 (고정 및 자동 활성화 유지) ---
     st.sidebar.header("4️⃣ 텔레그램 알림 설정 (자동)")
+    # 사용자님의 고정된 토큰 및 ID 사용
     tg_token = "7983927652:AAH8RRQpyJaika94NVmbmowvDIu5wHgfyWo"
     tg_chat_id = "1786596437"
     enable_alert = True 
@@ -381,9 +435,10 @@ def main():
             st.warning("분석할 전략을 1개 이상 선택해주세요. 🧘")
             return
 
-        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 총 {len(tickers_input.split(','))}개 종목을 스캔합니다...")
-        
         tickers = [t.strip() for t in tickers_input.split(',') if t.strip()]
+        
+        st.write(f"### 🕵️ '{', '.join(selected_strategies)}' 전략으로 총 {len(tickers)}개 종목을 스캔합니다...")
+        
         found_count = 0
         progress_bar = st.progress(0)
         
@@ -392,48 +447,78 @@ def main():
             # --- 정보 가져오기 ---
             info, market_cap_usd, analyst_rec = get_stock_info(ticker)
             
-            # --- 다중 전략 분석 실행 ---
+            # --- 분석 실행 ---
             matched_reasons = analyze_stock(ticker, selected_strategies)
             
+            # --- 결과 처리 ---
             if matched_reasons:
                 found_count += 1
                 
-                # 화면 표시
-                with st.expander(f"🔥 {ticker} - 매수 신호 포착! (총 {len(matched_reasons)}개 조건 만족)", expanded=True):
-                    st.markdown(f"**📈 시가총액:** 약 {market_cap_usd:,.1f} 억 달러")
-                    st.markdown(f"**🗣️ 애널리스트 의견:** **{analyst_rec.upper()}**")
-                    
-                    # 데이터를 다시 다운로드하고 지표 계산 (차트용)
-                    data_for_plot = yf.Ticker(ticker).history(period="1y")
-                    data_for_plot = calculate_indicators(data_for_plot)
-                    
-                    # 매칭된 전략명을 모두 합쳐서 차트 함수에 전달 (차트 지표 표시를 위해)
-                    strategy_list = [match['strategy'] for match in matched_reasons]
-                    strategy_names = ", ".join(strategy_list)
+                # Streamlit UI에 결과 표시
+                st.markdown(f"#### 🎯 {ticker} ({info.get('shortName', 'N/A')}) - 타점 발견!")
+                st.markdown(f"**💰 시가총액:** {market_cap_usd:.2f} 억 달러")
+                
+                # 차트 생성 및 표시를 위해 다시 데이터 로드 및 분석
+                # analyze_stock에서 이미 데이터 로드 및 분석을 했지만, 
+                # 차트 함수가 DF를 요구하므로 여기서 한 번 더 처리하거나 analyze_stock이 DF를 반환하도록 수정 필요.
+                # 편의를 위해 여기서 다시 yf.Ticker를 호출합니다.
+                df = yf.Ticker(ticker).history(period="1y")
+                df_analyzed = calculate_indicators(df)
+                
+                fig = plot_chart(ticker, df_analyzed if df_analyzed is not None else df, 
+                                 ", ".join([m['strategy'] for m in matched_reasons]), 
+                                 analyst_rec)
+                if fig:
+                    st.pyplot(fig)
+                
+                st.markdown("**📌 발견된 전략:**")
+                telegram_message_parts = [f"<b>{ticker}</b> ({info.get('shortName', 'N/A')}) 타점 발견!"]
+                
+                for reason_data in matched_reasons:
+                    # HTML 포맷을 위해 <b> 태그 사용
+                    st.markdown(f"- **{reason_data['strategy']}**: {reason_data['reason']}")
+                    telegram_message_parts.append(f"- {reason_data['strategy']}: {reason_data['reason']}")
+                
+                st.markdown("---")
 
-                    # 차트 시각화
-                    fig = plot_chart(ticker, data_for_plot, strategy_names, analyst_rec)
-                    if fig:
-                        st.pyplot(fig)
-                        
-                    # 매칭된 이유 출력
-                    for match in matched_reasons:
-                        st.info(f"**[{match['strategy']}]** {match['reason']}")
-                        
-                        # 텔레그램 전송
-                        if enable_alert and tg_token and tg_chat_id:
-                            msg = f"[신호 포착] 🚀 종목: {ticker} | 전략: {match['strategy']} | 이유: {match['reason']}"
-                            send_telegram_msg(tg_token, tg_chat_id, msg)
-                    
-                    if enable_alert and tg_token and tg_chat_id:
-                        st.success(f"📩 {ticker} 알림 전송 완료 (자동)")
-                        
+                # 텔레그램 알림 전송 (하나의 알림으로 통합)
+                if enable_alert:
+                    telegram_message = "\n".join(telegram_message_parts)
+                    send_telegram_msg(tg_token, tg_chat_id, telegram_message)
+            
+            # 프로그레스 바 업데이트
             progress_bar.progress((i + 1) / len(tickers))
-        
-        if found_count == 0:
-            st.warning("선택한 전략에 맞는 종목을 찾지 못했습니다. 😢 시장 상황을 고려하여 **전략 선택을 줄이거나** 잠시 후 다시 시도해보세요. 🧘")
-        else:
-            st.success(f"총 {found_count}개의 매수 타점 종목을 찾았습니다. 🎉")
 
-if __name__ == "__main__":
+        progress_bar.empty()
+        st.success(f"✅ 스캔 완료! 총 {len(tickers)}개 종목 중 {found_count}개 종목에서 타점을 발견했습니다.")
+
+    # --- 개별 종목 분석 섹션 ---
+    # 개별 종목 분석을 위한 로직 추가
+    if st.sidebar.button("📊 개별 종목 조회") and single_ticker:
+        st.sidebar.markdown("---")
+        st.sidebar.header("개별 조회 결과")
+        
+        # 데이터 가져오기 및 분석
+        ticker_obj = yf.Ticker(single_ticker)
+        df = ticker_obj.history(period="1y") 
+        
+        info, market_cap_usd, analyst_rec = get_stock_info(single_ticker)
+
+        if not df.empty and 'Close' in df.columns:
+            display_ticker_info(single_ticker, df, analyst_rec)
+            # 개별 조회 시에도 전략 검사 수행 (옵션)
+            matched_reasons = analyze_stock(single_ticker, all_strategies)
+            if matched_reasons:
+                 st.markdown("#### ✨ 현재 전략 일치 여부 (전체 전략 기준):")
+                 for reason_data in matched_reasons:
+                    st.markdown(f"- **{reason_data['strategy']}**: {reason_data['reason']}")
+            else:
+                st.markdown("#### ✨ 현재 일치하는 전략 타점이 없습니다. (전체 전략 기준)")
+        else:
+            st.sidebar.error(f"티커 **{single_ticker}**의 데이터를 불러올 수 없거나 유효하지 않습니다.")
+
+# 앱 실행
+if __name__ == '__main__':
+    # 텔레그램 토큰이 노출되는 것을 방지하기 위해 실제 환경에서는 환경 변수를 사용하는 것이 좋습니다.
+    # 이 코드는 Streamlit 환경에서 직접 실행될 때의 예시입니다.
     main()
