@@ -10,7 +10,7 @@ def send_telegram_msg(bot_token, chat_id, message):
     if not bot_token or not chat_id:
         return
     try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        url = f"https://api.telegram.com/bot{bot_token}/sendMessage"
         params = {'chat_id': chat_id, 'text': message}
         requests.get(url, params=params)
     except Exception as e:
@@ -70,6 +70,12 @@ def calculate_indicators(df):
         
         # 거래량 평균
         df_copy['VolMA20'] = safe_rolling_mean(df_copy['Volume'], 20)
+
+        # ----------------- V6.2: 이격도 추가 -----------------
+        # J. 이격도 (20일 이동평균선 대비 종가의 비율)
+        if 'MA20' in df_copy.columns:
+            # 이격도 = (현재 종가 / MA20) * 100
+            df_copy['Disparity'] = (df_copy['Close'] / df_copy['MA20']) * 100
         
     except Exception as e:
         # 지표 계산 중 오류 발생 시 None 반환
@@ -78,12 +84,12 @@ def calculate_indicators(df):
     return df_copy
 
 # -------------------------------------------------------------
-# 🌟 analyze_stock 함수 (V6.1 로직 적용) 🌟
+# 🌟 analyze_stock 함수 (V6.2 로직 적용 - 다이버전스, 이격도 추가) 🌟
 # -------------------------------------------------------------
 def analyze_stock(ticker, selected_strategies):
     # 데이터 가져오기 (최근 1년 데이터)
     try:
-        # V6.1: 데이터 로딩 시 Ticker 객체를 사용하여 오류를 줄여보는 시도
+        # Ticker 객체를 사용하여 오류를 줄여보는 시도
         ticker_obj = yf.Ticker(ticker)
         df = ticker_obj.history(period="1y") 
     except Exception:
@@ -95,15 +101,15 @@ def analyze_stock(ticker, selected_strategies):
     # 지표 계산 시도
     df_analyzed = calculate_indicators(df)
     
-    # V6.1: 지표 계산 실패 시(None 반환) 원본 데이터프레임을 사용 (최소한의 분석 시도)
+    # 지표 계산 실패 시(None 반환) 원본 데이터프레임을 사용 (최소한의 분석 시도)
     if df_analyzed is None:
         st.warning(f"🚨 {ticker} 지표 계산 중 오류가 발생했습니다. 일부 전략은 건너뜁니다.")
         df = df.copy() # 원본 df를 사용
     else:
         df = df_analyzed
     
-    # 데이터프레임이 최소 2일 이상이어야 분석 가능
-    if len(df) < 2:
+    # 데이터프레임이 최소 6일 이상이어야 분석 가능 (다이버전스를 위해)
+    if len(df) < 6:
         return []
 
     # 최신 데이터 기준
@@ -112,11 +118,10 @@ def analyze_stock(ticker, selected_strategies):
     
     matched_reasons = []
 
-    # ================= V6.1 극단적 안정화된 타점 전략 로직 =================
+    # ================= V6.1 기반 안정화된 타점 전략 로직 =================
     
     # 전략 A: 강력 수급 폭발 (거래량 1.5배)
     if "A. 강력 수급 폭발 (거래량 1.5배)" in selected_strategies and 'VolMA20' in df.columns:
-        # .get()을 사용하여 컬럼이 없거나 NaN인 경우를 안전하게 처리
         if not pd.isna(today.get('Volume', np.nan)) and not pd.isna(today.get('VolMA20', np.nan)) and today['Volume'] > (today['VolMA20'] * 1.5) and today['Close'] > today['Open']:
             pct_change = ((today['Close'] - yesterday['Close']) / yesterday['Close']) * 100
             matched_reasons.append({"strategy": "A. 강력 수급 폭발", "reason": f"🔥 거래량이 평소 1.5배 이상 터지며 {pct_change:.2f}% 급등했습니다. (강한 매수 유입)"})
@@ -174,10 +179,49 @@ def analyze_stock(ticker, selected_strategies):
              # 데이터 불안정으로 계산 실패 시 무시
              pass
             
+    # ================= V6.2: 다이버전스 및 이격도 전략 로직 추가 =================
+    
+    # 다이버전스 분석을 위한 최근 5일 데이터 준비 (n=5)
+    n = 5
+    recent_df = df.iloc[-n-1:-1].copy() # 어제까지의 n일 데이터 (총 n개)
+    
+    # V6.2: 다이버전스 전제 조건: 주가는 n일 동안 저점을 갱신했는가?
+    # 종가 기준 저점 비교가 가장 보편적입니다.
+    price_low_new = today.get('Close', np.nan) 
+    price_low_old = recent_df['Close'].min()
+    
+    # 주가 하락 (새 저점 < 이전 n일간 저점)이 전제되어야 상승 다이버전스 검색 가능
+    is_price_diverging = not pd.isna(price_low_new) and not pd.isna(price_low_old) and price_low_new < price_low_old 
+    
+    # 전략 H: RSI 상승 다이버전스 (RSI 저점 상승)
+    if "H. RSI 상승 다이버전스" in selected_strategies and is_price_diverging and 'RSI' in df.columns:
+        rsi_low_new = today.get('RSI', np.nan)
+        rsi_low_old = recent_df['RSI'].min() if 'RSI' in recent_df.columns else np.nan
+        
+        # RSI 저점 상승 (새 저점 > 이전 저점) and RSI 40 이하에서 발생 (신뢰도 높음)
+        if not pd.isna(rsi_low_new) and not pd.isna(rsi_low_old) and rsi_low_new > rsi_low_old and rsi_low_new < 40: 
+            matched_reasons.append({"strategy": "H. RSI 상승 다이버전스", "reason": f"⚡️ 주가 저점 하락에도 RSI({rsi_low_new:.1f})는 상승하여 **강력한 추세 반전(다이버전스)** 신호 포착."})
+
+    # 전략 I: MACD 상승 다이버전스 (MACD 저점 상승)
+    if "I. MACD 상승 다이버전스" in selected_strategies and is_price_diverging and 'MACD' in df.columns:
+        macd_low_new = today.get('MACD', np.nan)
+        macd_low_old = recent_df['MACD'].min() if 'MACD' in recent_df.columns else np.nan
+        
+        # MACD 저점 상승 (새 저점 > 이전 저점) and MACD 0선 이하에서 발생 (신뢰도 높음)
+        if not pd.isna(macd_low_new) and not pd.isna(macd_low_old) and macd_low_new > macd_low_old and today.get('MACD', 1) < 0:
+            matched_reasons.append({"strategy": "I. MACD 상승 다이버전스", "reason": f"✨ 주가 하락에도 MACD({macd_low_new:.2f})는 상승하여 **중기 추세 반전(다이버전스)** 신호 포착."})
+
+    # 전략 J: MA 이격도 과매도 (20일선 대비 95% 이하)
+    if "J. MA 이격도 과매도" in selected_strategies and 'Disparity' in df.columns:
+        tdisparity = today.get('Disparity', np.nan)
+        # 이격도가 95% 이하: 주가가 20일 이동평균선보다 5% 이상 하락
+        if not pd.isna(tdisparity) and tdisparity <= 95.0:
+            matched_reasons.append({"strategy": "J. MA 이격도 과매도", "reason": f"📉 이격도({tdisparity:.1f}%)가 95% 이하로 **단기 낙폭 과대** 상태입니다. 평균 회귀 기대."})
+            
     return matched_reasons
 
 # ---------------------------------------------------------
-# 2. 차트 시각화 함수 (V6.0과 동일)
+# 2. 차트 시각화 함수 (변화 없음)
 # ---------------------------------------------------------
 def plot_chart(ticker, df, strategy_type, analyst_rec):
     if df is None or df.empty or 'Close' not in df.columns:
@@ -253,7 +297,7 @@ def plot_chart(ticker, df, strategy_type, analyst_rec):
 # ---------------------------------------------------------
 
 # ---------------------------------------------------------
-# 3. 메인 앱 UI (Streamlit) (V6.0과 동일)
+# 3. 메인 앱 UI (Streamlit)
 # ---------------------------------------------------------
 def get_stock_info(ticker):
     """티커 정보, 마켓캡, 애널리스트 의견을 가져오는 헬퍼 함수"""
@@ -280,8 +324,8 @@ def display_ticker_info(ticker, df, analyst_rec):
 
 
 def main():
-    st.set_page_config(page_title="AI Trading Scanner V6.1", layout="wide")
-    st.title("🚀 AI 심화 분석 스캐너 (V6.1 - 데이터 안정성 강화 버전)")
+    st.set_page_config(page_title="AI Trading Scanner V6.2", layout="wide")
+    st.title("🚀 AI 심화 분석 스캐너 (V6.2 - 다이버전스/이격도 추가 버전)")
     st.markdown("---")
     
     # --- 1️⃣ 사이드바 설정 ---
@@ -291,6 +335,7 @@ def main():
     
     # --- 2️⃣ 타점 전략 선택 (Multiselect) ---
     st.sidebar.header("2️⃣ 타점 전략 선택 (다중 선택 가능)")
+    # V6.2: 새로운 전략 3개 추가
     all_strategies = [
         "A. 강력 수급 폭발 (거래량 1.5배)", 
         "B. 단기/중기 이동평균선 골든크로스 (MA20 > MA60)", 
@@ -299,7 +344,11 @@ def main():
         "E. MFI 과매도 반등 (20 이하)", 
         "F. 볼린저밴드 상단 돌파", 
         "G. 장대양봉 및 짧은 꼬리", 
+        "H. RSI 상승 다이버전스",         # 🌟 NEW
+        "I. MACD 상승 다이버전스",       # 🌟 NEW
+        "J. MA 이격도 과매도",            # 🌟 NEW
     ]
+    
     # 사용자가 이전 선택을 유지하도록 default 값 제거
     selected_strategies = st.sidebar.multiselect("원하는 타점을 모두 선택하세요 (OR 조건)", all_strategies)
 
@@ -355,7 +404,6 @@ def main():
                     st.markdown(f"**🗣️ 애널리스트 의견:** **{analyst_rec.upper()}**")
                     
                     # 데이터를 다시 다운로드하고 지표 계산 (차트용)
-                    # analyze_stock에서 사용한 df_analyzed (또는 df)를 직접 전달
                     data_for_plot = yf.Ticker(ticker).history(period="1y")
                     data_for_plot = calculate_indicators(data_for_plot)
                     
